@@ -23,5 +23,5 @@ TEST(MemoryPoolTest, Defragmentation) {
     pool.deallocate(ptr1, size1);
     pool.deallocate(ptr2, size2);
 
-    pool.defragment();  // Проверяем, что не падает
+    pool.defrag();  // Проверяем, что не падает
 }

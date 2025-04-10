@@ -11,6 +11,8 @@ add_compile_options(-O3 -march=native)
 enable_testing()
 find_package(GTest REQUIRED)
 
+include_directories(include)
+
 # Исходные файлы
 file(GLOB SOURCES "src/*.cpp")
 

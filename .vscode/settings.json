@@ -1,4 +1,10 @@
 {
     "clangd.path": "/usr/bin/clangd-14",
-    "cmake.configureOnOpen": true
+    "cmake.configureOnOpen": true,
+    "files.associations": {
+      "*.sqlbook": "sql",
+      "*.ndjson": "jsonl",
+      "*.dbclient-js": "javascript",
+      "cstring": "cpp"
+    }
   }

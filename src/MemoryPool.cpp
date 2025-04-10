@@ -28,7 +28,7 @@ std::pair<void*, size_t> MemoryPool::allocate(size_t size) {
     size_t start_block = find_contiguous_blocks(num_blocks);
 
     if (start_block == static_cast<size_t>(-1)) {
-        defragment();  // Попытка дефрагментации
+        defrag();  // Попытка дефрагментации
         start_block = find_contiguous_blocks(num_blocks);
         if (start_block == static_cast<size_t>(-1)) return {nullptr, 0};
     }
@@ -69,7 +69,7 @@ size_t MemoryPool::find_contiguous_blocks(size_t num_blocks) {
     return -1;
 }
 
-void MemoryPool::defragment() {
+void MemoryPool::defrag() {
     // Упрощенная дефрагментация: копируем все данные в новый регион
     char* new_memory = static_cast<char*>(aligned_alloc(block_size, pool_size));
     size_t new_offset = 0;

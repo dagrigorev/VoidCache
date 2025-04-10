@@ -155,6 +155,20 @@ docker-compose run --rm cpp-builder bash -c "
 "
 ```
 
+Полезные команды
+
+Сборка проекта	
+`docker-compose run --rm cpp-builder bash -c "cd build && ninja"`
+
+Запуск тестов	
+`docker-compose run --rm cpp-builder bash -c "cd build && ctest"`
+
+Открыть контейнер в VSCode	
+`F1 → Remote-Containers: Attach`
+
+Очистить сборку	
+`docker-compose run --rm cpp-builder rm -rf build/`
+
 
 Метрики:
 RPS (запросов в секунду).

@@ -10,7 +10,7 @@
 class MemoryPool {
 public:
     explicit MemoryPool(size_t pool_size, size_t block_size = 4096);
-    ~MemoryPool() {}
+    ~MemoryPool();
 
     /**
      * Выделение памяти
