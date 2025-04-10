@@ -1,0 +1,7 @@
+services:
+  cpp-builder:
+    image: cpp20-dev-env
+    volumes:
+      - .:/workspace  # Монтируем текущую папку в контейнер
+    working_dir: /workspace
+    tty: true  # Для интерактивного режима

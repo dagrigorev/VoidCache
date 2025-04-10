@@ -1,0 +1,19 @@
+{
+    "version": "0.2.0",
+    "configurations": [
+      {
+        "name": "Debug in Docker",
+        "type": "cppdbg",
+        "request": "launch",
+        "program": "${workspaceFolder}/build/void",
+        "args": [],
+        "environment": [],
+        "cwd": "${workspaceFolder}",
+        "externalConsole": false,
+        "MIMode": "gdb",
+        "setupCommands": [
+          { "text": "handle SIGINT stop" }
+        ]
+      }
+    ]
+  }

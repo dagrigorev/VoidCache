@@ -1,0 +1,4 @@
+{
+    "clangd.path": "/usr/bin/clangd-14",
+    "cmake.configureOnOpen": true
+  }

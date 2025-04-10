@@ -145,6 +145,16 @@ XDP	Пропускная способность	iperf3, perf
 Утилиты:
 wrk2 для генерации UDP-трафика.
 grafana + prometheus для мониторинга.
+3.3 Запуск тестов
+```bash
+docker-compose run --rm cpp-builder bash -c "
+    mkdir -p build && cd build &&
+    cmake -GNinja -DBUILD_TESTS=ON .. &&
+    ninja &&
+    ctest --output-on-failure
+"
+```
+
 
 Метрики:
 RPS (запросов в секунду).
