@@ -2,15 +2,15 @@
     "version": "0.2.0",
     "configurations": [
       {
-        "name": "Debug in Docker",
+        "name": "Debug in local test",
         "type": "cppdbg",
         "request": "launch",
-        "program": "${workspaceFolder}/build/void",
+        "program": "${workspaceFolder}/build/memory_pool_test",
         "args": [],
         "environment": [],
         "cwd": "${workspaceFolder}",
         "externalConsole": false,
-        "MIMode": "gdb",
+        "MIMode": "lldb",
         "setupCommands": [
           { "text": "handle SIGINT stop" }
         ]

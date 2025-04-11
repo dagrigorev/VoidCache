@@ -2,6 +2,7 @@
 #include <vector>
 #include <atomic>
 #include <cstddef>
+#include <functional>
 
 /**
  * Пул памяти
@@ -12,6 +13,7 @@ public:
     explicit MemoryPool(size_t pool_size, size_t block_size = 4096);
     ~MemoryPool();
 
+    using UpdatePtrCallback = std::function<void(void* old_ptr, void* new_ptr)>;
     /**
      * Выделение памяти
      * Возвращает указатель и фактический размер выделенной памяти
@@ -27,7 +29,7 @@ public:
     /**
      * Дефрагментирует память
      */
-    void defrag();
+    void defrag(UpdatePtrCallback callback = nullptr);
 
 private:
     // Общий размер пула
