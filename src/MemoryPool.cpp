@@ -50,6 +50,14 @@ void MemoryPool::deallocate(void* ptr, size_t size) {
     size_t start_block = (static_cast<char*>(ptr) - memory.load()) / block_size;
     size_t num_blocks = (size + block_size - 1) / block_size;
 
+    // Проверяем, что блоки действительно заняты
+    for (size_t i = 0; i < num_blocks; ++i) {
+        if (block_map[start_block + i]) {
+            throw std::runtime_error("Double free detected");
+        }
+    }
+
+    // Освобождаем
     for (size_t i = 0; i < num_blocks; ++i) {
         block_map[start_block + i] = true;
     }
@@ -60,10 +68,10 @@ size_t MemoryPool::find_contiguous_blocks(size_t num_blocks) {
     for (size_t i = 0; i < block_map.size(); ) {
         if (block_map[i]) {
             size_t j = i;
-            while (j < block_map.size() && block_map[j] && (j - i + 1) < num_blocks) {
+            while (j < block_map.size() && block_map[j] && (j + 1 - i) < num_blocks) {
                 ++j;
             }
-            if ((j - i + 1) >= num_blocks) return i;
+            if ((j + 1 - i) >= num_blocks) return i;
             i = j + 1;
         } else {
             ++i;
@@ -107,7 +115,7 @@ void MemoryPool::defrag(UpdatePtrCallback callback) {
     }
 
     // Считаем свободные блоки
-    free_blocks = std::count(block_map.begin(), block_map.end(), true);
+    free_blocks = block_map.size() - (new_offset / block_size);
 
     // Уведомляем об изменении адресов
     if(callback) {
@@ -118,7 +126,5 @@ void MemoryPool::defrag(UpdatePtrCallback callback) {
 
     // Переключаем память
     free(memory.load());
-    if(!new_memory)
-        throw std::bad_alloc();
     memory.store(new_memory);
 }
