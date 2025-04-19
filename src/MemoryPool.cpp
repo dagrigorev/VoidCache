@@ -1,10 +1,13 @@
 #include "MemoryPool.h"
+
+#include <cassert>
 #include <cstring>
-#include <stdexcept>
 #include <sys/mman.h> // mprotect Linux API
 
 MemoryPool::MemoryPool(size_t pool_size, size_t block_size)
     : pool_size(pool_size), block_size(block_size) {
+    assert(pool_size > block_size);
+
     // Выделяем память с выравниванием по границе страницы
     memory = static_cast<char*>(aligned_alloc(block_size, pool_size)); // TODO: Попробовать заменить на mmap
     //memory = static_cast<char*>(mmap(nullptr, pool_size, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0));
@@ -69,15 +72,53 @@ size_t MemoryPool::find_contiguous_blocks(size_t num_blocks) {
     return -1;
 }
 
-void MemoryPool::defrag() {
-    // Упрощенная дефрагментация: копируем все данные в новый регион
+void MemoryPool::defrag(UpdatePtrCallback callback) {
     char* new_memory = static_cast<char*>(aligned_alloc(block_size, pool_size));
+    if(!new_memory) throw std::bad_alloc();
+
     size_t new_offset = 0;
+    std::unordered_map<void*, void*> ptr_map;
 
-    // TODO: Реализовать логику копирования "живых" данных из memory в new_memory
+    // Проходим по всем блокам пула
+    for(size_t i = 0; i < block_map.size();) {
+        if(!block_map[i]) {
+            void* old_ptr = memory.load() + i * block_size;
+            size_t num_blocks = 1;
+            
+            // Определяем размер непрерывного участка блоков
+            while(i + num_blocks < block_map.size() && !block_map[i + num_blocks])
+                num_blocks++;
 
+            // Копируем данные в новый регион
+            void* new_ptr = new_memory + new_offset;
+            memcpy(new_ptr, old_ptr, num_blocks * block_size);
+            ptr_map[old_ptr] = new_ptr;
+
+            // Обновляем карту памяти
+            for(size_t j = 0; j < num_blocks; ++j) {
+                block_map[i + j] = true; // Старые блоки освобождены
+                block_map[new_offset / block_size + j] = false; // Новые блоки заняты
+            }
+
+            new_offset += num_blocks * block_size;
+            i += num_blocks;
+        } else
+            ++i;
+    }
+
+    // Считаем свободные блоки
+    free_blocks = std::count(block_map.begin(), block_map.end(), true);
+
+    // Уведомляем об изменении адресов
+    if(callback) {
+        for (const auto& [old_ptr, new_ptr] : ptr_map) {
+            callback(old_ptr, new_ptr);
+        }
+    }
+
+    // Переключаем память
     free(memory.load());
+    if(!new_memory)
+        throw std::bad_alloc();
     memory.store(new_memory);
-    std::fill(block_map.begin(), block_map.end(), true);
-    free_blocks = block_map.size();
 }
