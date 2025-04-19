@@ -95,7 +95,7 @@ void MemoryPool::defrag(UpdatePtrCallback callback) {
             ptr_map[old_ptr] = new_ptr;
 
             // Обновляем карту памяти
-            for(size_t j = 0; j < block_map.size(); ++j) {
+            for(size_t j = 0; j < num_blocks; ++j) {
                 block_map[i + j] = true; // Старые блоки освобождены
                 block_map[new_offset / block_size + j] = false; // Новые блоки заняты
             }
@@ -103,8 +103,11 @@ void MemoryPool::defrag(UpdatePtrCallback callback) {
             new_offset += num_blocks * block_size;
             i += num_blocks;
         } else
-            i++;
+            ++i;
     }
+
+    // Считаем свободные блоки
+    free_blocks = std::count(block_map.begin(), block_map.end(), true);
 
     // Уведомляем об изменении адресов
     if(callback) {
