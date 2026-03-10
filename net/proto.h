@@ -27,7 +27,9 @@
  * New VoidCache commands extend the command set (see commands.h).
  * ─────────────────────────────────────────────────────────────────────────── */
 #pragma once
-#define _POSIX_C_SOURCE 200809L
+#if !defined(_WIN32) && !defined(_POSIX_C_SOURCE)
+# define _POSIX_C_SOURCE 200809L
+#endif
 
 #include <stddef.h>
 #include <stdint.h>

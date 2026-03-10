@@ -1,33 +1,82 @@
 /*
- * compat/wepoll.h  —  Thin wrapper that routes to either real epoll (Linux/macOS)
- * or the wepoll library (Windows/MSYS2).
+ * wepoll.h — epoll for Windows
  *
- * On Windows (MSYS2/MinGW), install wepoll first:
- *   pacman -S mingw-w64-ucrt-x86_64-wepoll
+ * Embedded from: https://github.com/piscisaureus/wepoll (MIT License)
+ * This is the public API header. The implementation is in wepoll.c.
  *
- * This header is included by net/server.c when _WIN32 is defined,
- * in place of <sys/epoll.h>.
- *
- * wepoll provides an identical API to Linux epoll:
- *   epoll_create1()  epoll_ctl()  epoll_wait()
- *   struct epoll_event  EPOLLIN  EPOLLOUT  EPOLLERR  EPOLLHUP  EPOLLET
+ * Drop-in replacement for <sys/epoll.h> on Windows.
+ * Compile wepoll.c alongside your project — no library needed.
  */
 
-#ifndef VCACHE_COMPAT_WEPOLL_H
-#define VCACHE_COMPAT_WEPOLL_H
+#ifndef WEPOLL_H_
+#define WEPOLL_H_
 
 #ifdef _WIN32
-  /* wepoll installed via pacman -S mingw-w64-ucrt-x86_64-wepoll */
-  #include <wepoll.h>
-  /* wepoll uses HANDLE instead of int for epoll fds — typedef for compat */
-  #ifndef EPOLL_FD_T
-    #define EPOLL_FD_T HANDLE
-  #endif
-#else
-  #include <sys/epoll.h>
-  #ifndef EPOLL_FD_T
-    #define EPOLL_FD_T int
-  #endif
+
+#ifndef WIN32_LEAN_AND_MEAN
+# define WIN32_LEAN_AND_MEAN
 #endif
 
-#endif /* VCACHE_COMPAT_WEPOLL_H */
+#include <stdint.h>
+#include <windows.h>
+
+/* Event types */
+#define EPOLLIN      (1U <<  0)
+#define EPOLLPRI     (1U <<  1)
+#define EPOLLOUT     (1U <<  2)
+#define EPOLLERR     (1U <<  3)
+#define EPOLLHUP     (1U <<  4)
+#define EPOLLRDNORM  (1U <<  6)
+#define EPOLLRDBAND  (1U <<  7)
+#define EPOLLWRNORM  (1U <<  8)
+#define EPOLLWRBAND  (1U <<  9)
+#define EPOLLMSG     (1U << 10)  /* never reported */
+#define EPOLLRDHUP   (1U << 13)
+#define EPOLLONESHOT (1U << 30)
+#define EPOLLET      (1U << 31)
+
+/* epoll_ctl() opcodes */
+#define EPOLL_CTL_ADD 1
+#define EPOLL_CTL_MOD 2
+#define EPOLL_CTL_DEL 3
+
+/* epoll_create1() flags */
+#define EPOLL_CLOEXEC 0x80000
+
+typedef void*   HANDLE;
+
+typedef union epoll_data {
+    void*    ptr;
+    int      fd;
+    uint32_t u32;
+    uint64_t u64;
+    SOCKET   sock;  /* Windows-specific */
+    HANDLE   hnd;   /* Windows-specific */
+} epoll_data_t;
+
+struct epoll_event {
+    uint32_t     events;
+    epoll_data_t data;
+};
+
+#ifdef __cplusplus
+extern "C" {
+#endif
+
+HANDLE epoll_create(int size);
+HANDLE epoll_create1(int flags);
+int    epoll_close(HANDLE ephnd);
+int    epoll_ctl(HANDLE ephnd, int op, SOCKET sock, struct epoll_event* event);
+int    epoll_wait(HANDLE ephnd, struct epoll_event* events, int maxevents, int timeout);
+
+#ifdef __cplusplus
+}
+#endif
+
+/* Map close() on an epoll HANDLE to epoll_close() */
+#ifndef epoll_close
+/* caller must use epoll_close() explicitly for epoll HANDLEs */
+#endif
+
+#endif /* _WIN32 */
+#endif /* WEPOLL_H_ */

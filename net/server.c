@@ -17,7 +17,11 @@
 #include "auth.h"
 #include "vc_ssl_abi.h"
 
-#ifdef _WIN32
+#ifdef _MSC_VER
+# include "../compat/msvc.h"
+# include "../compat/pthread_win32.h"
+# include "../compat/wepoll.h"
+#elif defined(_WIN32)
 # include "../compat/windows.h"
 # include "../compat/wepoll.h"
 #else

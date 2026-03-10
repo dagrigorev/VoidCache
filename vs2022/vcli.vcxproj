@@ -1,0 +1,214 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  VoidCache vcli — Visual Studio 2022 Project
+  ============================================
+  Prerequisites (install once):
+    1. Visual Studio 2022 with "Desktop development with C++" workload
+    2. OpenSSL for Windows:
+       Option A (recommended): NuGet — the project already references it.
+                               Right-click solution → Restore NuGet Packages
+       Option B: vcpkg — run setup.ps1 in this folder
+       Option C: pre-built binaries from https://slproweb.com/products/Win32OpenSSL.html
+                 Install to C:\Program Files\OpenSSL-Win64, then set OPENSSL_ROOT_DIR
+
+  Build:
+    Open vcli.sln in VS2022, select Release|x64, press Ctrl+Shift+B
+    Or from Developer Command Prompt:
+      msbuild vcli.sln /p:Configuration=Release /p:Platform=x64
+
+  Output:
+    vs2022\x64\Release\vcli.exe (+ OpenSSL DLLs copied automatically)
+
+  Run:
+    vs2022\x64\Release\vcli.exe -h localhost -p 6379 PING
+-->
+<Project DefaultTargets="Build" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+  <ItemGroup Label="ProjectConfigurations">
+    <ProjectConfiguration Include="Debug|x64">
+      <Configuration>Debug</Configuration>
+      <Platform>x64</Platform>
+    </ProjectConfiguration>
+    <ProjectConfiguration Include="Release|x64">
+      <Configuration>Release</Configuration>
+      <Platform>x64</Platform>
+    </ProjectConfiguration>
+  </ItemGroup>
+  <PropertyGroup Label="Globals">
+    <ProjectGuid>{A1B2C3D4-E5F6-7890-ABCD-EF1234567890}</ProjectGuid>
+    <Keyword>Win32Proj</Keyword>
+    <RootNamespace>vcli</RootNamespace>
+    <WindowsTargetPlatformVersion>10.0</WindowsTargetPlatformVersion>
+    <ProjectName>vcli</ProjectName>
+  </PropertyGroup>
+  <Import Project="$(VCTargetsPath)\Microsoft.Cpp.Default.props" />
+  <!-- ── Release configuration ─────────────────────────────────────────── -->
+  <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Release|x64'" Label="Configuration">
+    <ConfigurationType>Application</ConfigurationType>
+    <UseDebugLibraries>false</UseDebugLibraries>
+    <PlatformToolset>v143</PlatformToolset>
+    <!-- VS2022 toolset -->
+    <WholeProgramOptimization>true</WholeProgramOptimization>
+    <CharacterSet>MultiByte</CharacterSet>
+  </PropertyGroup>
+  <!-- ── Debug configuration ───────────────────────────────────────────── -->
+  <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Debug|x64'" Label="Configuration">
+    <ConfigurationType>Application</ConfigurationType>
+    <UseDebugLibraries>true</UseDebugLibraries>
+    <PlatformToolset>v143</PlatformToolset>
+    <CharacterSet>MultiByte</CharacterSet>
+  </PropertyGroup>
+  <Import Project="$(VCTargetsPath)\Microsoft.Cpp.props" />
+  <!-- ── Output directories ────────────────────────────────────────────── -->
+  <PropertyGroup>
+    <OutDir>$(SolutionDir)$(Platform)\$(Configuration)\</OutDir>
+    <IntDir>$(SolutionDir)$(Platform)\$(Configuration)\obj\</IntDir>
+  </PropertyGroup>
+  <!-- ── OpenSSL path detection ────────────────────────────────────────── -->
+  <!-- Priority: 1) NuGet (auto), 2) vcpkg, 3) manual install -->
+  <PropertyGroup>
+    <!-- vcpkg path (set VCPKG_ROOT env var or adjust here) -->
+    <VcpkgOpenSSL>$(VCPKG_ROOT)\installed\x64-windows</VcpkgOpenSSL>
+    <!-- Manual install path (https://slproweb.com/products/Win32OpenSSL.html) -->
+    <ManualOpenSSL>C:\Program Files\OpenSSL-Win64</ManualOpenSSL>
+    <!-- Auto-select: vcpkg wins if present, otherwise manual -->
+    <OpenSSLRoot Condition="Exists('$(VcpkgOpenSSL)\include\openssl\ssl.h')">$(VcpkgOpenSSL)</OpenSSLRoot>
+    <OpenSSLRoot Condition="'$(OpenSSLRoot)'=='' AND Exists('$(ManualOpenSSL)\include\openssl\ssl.h')">$(ManualOpenSSL)</OpenSSLRoot>
+    <OpenSSLRoot Condition="'$(OpenSSLRoot)'==''">C:\Program Files\OpenSSL-Win64</OpenSSLRoot>
+  </PropertyGroup>
+  <!-- ── Compiler settings ─────────────────────────────────────────────── -->
+  <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Release|x64'">
+    <ClCompile>
+      <PreprocessorDefinitions>
+        _CRT_SECURE_NO_WARNINGS;
+        _WINSOCK_DEPRECATED_NO_WARNINGS;
+        WIN32_LEAN_AND_MEAN;
+        _WIN32_WINNT=0x0A00;
+        VCACHE_WINDOWS;
+        NDEBUG;
+        %(PreprocessorDefinitions)
+      </PreprocessorDefinitions>
+      <AdditionalIncludeDirectories>
+        $(SolutionDir)..\include;
+        $(SolutionDir)..\net;
+        $(SolutionDir)..\compat;
+        $(OpenSSLRoot)\include;
+        %(AdditionalIncludeDirectories)
+      </AdditionalIncludeDirectories>
+      <LanguageStandard>c++17</LanguageStandard>
+      <!-- /std:c++17 -->
+      <Optimization>MaxSpeed</Optimization>
+      <IntrinsicFunctions>true</IntrinsicFunctions>
+      <FavorSizeOrSpeed>Speed</FavorSizeOrSpeed>
+      <RuntimeLibrary>MultiThreaded</RuntimeLibrary>
+      <!-- /MT static CRT -->
+      <WarningLevel>Level3</WarningLevel>
+      <DisableSpecificWarnings>4996;4200;4204;4221;4100;4101</DisableSpecificWarnings>
+      <!-- 4996: deprecated POSIX names  4200: zero-length array
+           4204: non-const aggregate init  4221: init from local addr
+           4100: unreferenced param  4101: unreferenced local -->
+    </ClCompile>
+    <Link>
+      <AdditionalDependencies>
+        ws2_32.lib;bcrypt.lib;
+        libssl.lib;libcrypto.lib;
+        %(AdditionalDependencies)
+      </AdditionalDependencies>
+      <AdditionalLibraryDirectories>
+        $(OpenSSLRoot)\lib;
+        $(OpenSSLRoot)\lib\VC\x64\MT;
+        %(AdditionalLibraryDirectories)
+      </AdditionalLibraryDirectories>
+      <EnableCOMDATFolding>true</EnableCOMDATFolding>
+      <OptimizeReferences>true</OptimizeReferences>
+      <SubSystem>Console</SubSystem>
+      <TargetMachine>MachineX64</TargetMachine>
+    </Link>
+    <!-- Copy OpenSSL DLLs to output dir after build -->
+    <PostBuildEvent>
+      <Command>
+        if exist "$(OpenSSLRoot)\bin\libssl-3-x64.dll" (
+          copy /Y "$(OpenSSLRoot)\bin\libssl-3-x64.dll"    "$(OutDir)"
+          copy /Y "$(OpenSSLRoot)\bin\libcrypto-3-x64.dll" "$(OutDir)"
+        ) else if exist "$(OpenSSLRoot)\bin\libssl-3.dll" (
+          copy /Y "$(OpenSSLRoot)\bin\libssl-3.dll"    "$(OutDir)"
+          copy /Y "$(OpenSSLRoot)\bin\libcrypto-3.dll" "$(OutDir)"
+        )
+        echo OpenSSL DLLs copied to $(OutDir)
+      </Command>
+    </PostBuildEvent>
+  </ItemDefinitionGroup>
+  <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">
+    <ClCompile>
+      <PreprocessorDefinitions>
+        _CRT_SECURE_NO_WARNINGS;
+        _WINSOCK_DEPRECATED_NO_WARNINGS;
+        WIN32_LEAN_AND_MEAN;
+        _WIN32_WINNT=0x0A00;
+        VCACHE_WINDOWS;
+        _DEBUG;
+        %(PreprocessorDefinitions)
+      </PreprocessorDefinitions>
+      <AdditionalIncludeDirectories>
+        $(SolutionDir)..\include;
+        $(SolutionDir)..\net;
+        $(SolutionDir)..\compat;
+        $(OpenSSLRoot)\include;
+        %(AdditionalIncludeDirectories)
+      </AdditionalIncludeDirectories>
+      <LanguageStandard>stdcpp17</LanguageStandard>
+      <Optimization>Disabled</Optimization>
+      <RuntimeLibrary>MultiThreadedDebug</RuntimeLibrary>
+      <!-- /MTd -->
+      <WarningLevel>Level3</WarningLevel>
+      <DisableSpecificWarnings>4996;4200;4204;4221;4100;4101</DisableSpecificWarnings>
+      <LanguageStandard_C>stdc17</LanguageStandard_C>
+    </ClCompile>
+    <Link>
+      <AdditionalDependencies>
+        ws2_32.lib;bcrypt.lib;
+        libssl.lib;libcrypto.lib;
+        %(AdditionalDependencies)
+      </AdditionalDependencies>
+      <AdditionalLibraryDirectories>
+        $(OpenSSLRoot)\lib;
+        $(OpenSSLRoot)\lib\VC\x64\MDd;
+        %(AdditionalLibraryDirectories)
+      </AdditionalLibraryDirectories>
+      <SubSystem>Console</SubSystem>
+      <TargetMachine>MachineX64</TargetMachine>
+      <GenerateDebugInformation>true</GenerateDebugInformation>
+    </Link>
+  </ItemDefinitionGroup>
+  <!-- ── Source files ──────────────────────────────────────────────────── -->
+  <ItemGroup>
+    <!-- Core cache engine -->
+    <ClCompile Include="..\src\voidcache.c" />
+    <!-- Network layer -->
+    <ClCompile Include="..\net\proto.c" />
+    <ClCompile Include="..\net\auth.c" />
+    <ClCompile Include="..\net\commands.c" />
+    <ClCompile Include="..\net\server.c" />
+    <ClCompile Include="..\net\cluster.c" />
+    <!-- CLI entry point -->
+    <ClCompile Include="..\cli\vcli.c" />
+    <!-- Windows compatibility shims (compiled as C, not headers) -->
+    <ClCompile Include="..\compat\wepoll.c" />
+    <ClCompile Include="..\compat\mman.c" />
+  </ItemGroup>
+  <!-- ── Header files (for IntelliSense / Solution Explorer) ──────────── -->
+  <ItemGroup>
+    <ClInclude Include="..\include\voidcache.h" />
+    <ClInclude Include="..\net\proto.h" />
+    <ClInclude Include="..\net\auth.h" />
+    <ClInclude Include="..\net\commands.h" />
+    <ClInclude Include="..\net\server.h" />
+    <ClInclude Include="..\net\cluster.h" />
+    <ClInclude Include="..\net\vc_ssl_abi.h" />
+    <ClInclude Include="..\compat\msvc.h" />
+    <ClInclude Include="..\compat\pthread_win32.h" />
+    <ClInclude Include="..\compat\mman.h" />
+    <ClInclude Include="..\compat\wepoll.h" />
+    <ClInclude Include="..\compat\windows.h" />
+  </ItemGroup>
+  <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
+</Project>

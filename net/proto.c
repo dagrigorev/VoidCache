@@ -2,6 +2,10 @@
  * net/proto.c  –  RESP3 protocol parser / writer implementation.
  */
 #define _POSIX_C_SOURCE 200809L
+#ifdef _MSC_VER
+# include "../compat/msvc.h"
+#endif
+
 #include <stdarg.h>
 #include <inttypes.h>
 #include "proto.h"

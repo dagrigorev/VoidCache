@@ -6,8 +6,15 @@
  * Password hashing: SHA-256(password) stored in ACL file as hex.
  * Session tokens: /dev/urandom or RAND_bytes from libcrypto.
  */
-#define _POSIX_C_SOURCE 200809L
+#ifndef _WIN32
+# define _POSIX_C_SOURCE 200809L
+#endif
 #include "auth.h"
+#ifdef _MSC_VER
+# include "../compat/msvc.h"
+#elif defined(_WIN32)
+# include "../compat/windows.h"
+#endif
 #include "vc_ssl_abi.h"
 
 #include <stdio.h>

@@ -2,6 +2,10 @@
  * net/commands.c  –  VoidCache command implementations.
  */
 #define _POSIX_C_SOURCE 200809L
+#ifdef _MSC_VER
+# include "../compat/msvc.h"
+#endif
+
 #include "commands.h"
 #include "proto.h"
 #include "auth.h"
