@@ -1,0 +1,7 @@
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: voidcache
+  labels:
+    app.kubernetes.io/name: voidcache
+    app.kubernetes.io/managed-by: kubectl

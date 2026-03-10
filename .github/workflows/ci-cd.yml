@@ -1,0 +1,216 @@
+name: VoidCache CI/CD
+
+on:
+  push:
+    branches: [main, develop]
+    tags:     ["v*.*.*"]
+  pull_request:
+    branches: [main]
+
+env:
+  REGISTRY:   ghcr.io
+  IMAGE_NAME: ${{ github.repository_owner }}/voidcache
+
+jobs:
+
+  # ── Build + test ────────────────────────────────────────────────────────────
+  build-and-test:
+    name: Build & Test
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install build dependencies
+        run: sudo apt-get install -y gcc make libssl-dev
+
+      - name: Build binary
+        run: make vcli
+
+      - name: Run unit tests
+        run: make test
+
+      - name: Build benchmark (verify it compiles)
+        run: make voidcache_bench
+
+      - name: Smoke test
+        run: |
+          ./vcli server --port 16399 &
+          SERVER_PID=$!
+          sleep 0.5
+          printf "PING\nSET k v\nGET k\nVCSET n int 42\nVCGET n\nQUIT\n" \
+            | ./vcli -p 16399 --no-color --pipe
+          kill $SERVER_PID
+          wait $SERVER_PID 2>/dev/null || true
+
+  # ── Docker build + push ─────────────────────────────────────────────────────
+  docker:
+    name: Docker Build & Push
+    runs-on: ubuntu-24.04
+    needs: build-and-test
+    permissions:
+      contents: read
+      packages: write
+
+    outputs:
+      image-tag: ${{ steps.meta.outputs.tags }}
+      image-digest: ${{ steps.build.outputs.digest }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to GitHub Container Registry
+        if: github.event_name != 'pull_request'
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Extract Docker metadata (tags + labels)
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
+          tags: |
+            # branch builds: ghcr.io/org/voidcache:main
+            type=ref,event=branch
+            # PR builds: ghcr.io/org/voidcache:pr-42
+            type=ref,event=pr
+            # semver tags: ghcr.io/org/voidcache:2.0.0 and :2.0 and :2
+            type=semver,pattern={{version}}
+            type=semver,pattern={{major}}.{{minor}}
+            type=semver,pattern={{major}}
+            # always push :latest on main
+            type=raw,value=latest,enable=${{ github.ref == 'refs/heads/main' }}
+            # git sha for traceability
+            type=sha,prefix=sha-,format=short
+
+      - name: Build and push
+        id: build
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          file: Dockerfile
+          push: ${{ github.event_name != 'pull_request' }}
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          # Multi-platform (uncomment to support ARM64 e.g. Graviton/Apple Silicon nodes):
+          # platforms: linux/amd64,linux/arm64
+          cache-from: type=gha
+          cache-to:   type=gha,mode=max
+
+      - name: Generate SBOM (Software Bill of Materials)
+        if: github.event_name != 'pull_request'
+        uses: anchore/sbom-action@v0
+        with:
+          image: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:latest
+
+  # ── Deploy to dev (on every push to develop) ───────────────────────────────
+  deploy-dev:
+    name: Deploy → dev
+    runs-on: ubuntu-24.04
+    needs: docker
+    if: github.ref == 'refs/heads/develop' && github.event_name == 'push'
+    environment: dev
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up kubectl
+        uses: azure/setup-kubectl@v3
+
+      - name: Configure kubeconfig
+        run: |
+          mkdir -p ~/.kube
+          echo "${{ secrets.KUBE_CONFIG_DEV }}" | base64 -d > ~/.kube/config
+          chmod 600 ~/.kube/config
+
+      - name: Set image tag in dev overlay
+        run: |
+          cd k8s/overlays/dev
+          # Update the image tag to the exact SHA that was just built
+          IMAGE_TAG="sha-$(echo '${{ github.sha }}' | cut -c1-7)"
+          sed -i "s/newTag: .*/newTag: \"${IMAGE_TAG}\"/" kustomization.yaml
+
+      - name: Deploy to dev
+        run: kubectl apply -k k8s/overlays/dev --server-side
+
+      - name: Wait for rollout
+        run: |
+          kubectl rollout status statefulset/vcache -n voidcache --timeout=180s
+          kubectl rollout status deployment/vcache-haproxy -n voidcache --timeout=60s
+
+      - name: Smoke test against dev cluster
+        run: |
+          kubectl port-forward svc/vcache 16399:6379 -n voidcache &
+          sleep 3
+          ./vcli -p 16399 --no-color PING
+          kill %1
+
+  # ── Deploy to prod (on semver tag v*.*.*) ──────────────────────────────────
+  deploy-prod:
+    name: Deploy → prod
+    runs-on: ubuntu-24.04
+    needs: docker
+    if: startsWith(github.ref, 'refs/tags/v')
+    environment: prod          # requires manual approval in GitHub Environments
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up kubectl
+        uses: azure/setup-kubectl@v3
+
+      - name: Configure kubeconfig
+        run: |
+          mkdir -p ~/.kube
+          echo "${{ secrets.KUBE_CONFIG_PROD }}" | base64 -d > ~/.kube/config
+          chmod 600 ~/.kube/config
+
+      - name: Set exact version tag in prod overlay
+        run: |
+          VERSION="${GITHUB_REF#refs/tags/v}"
+          cd k8s/overlays/prod
+          sed -i "s/newTag: .*/newTag: \"${VERSION}\"/" kustomization.yaml
+
+      - name: Deploy to prod (StatefulSet ordered rolling update)
+        run: kubectl apply -k k8s/overlays/prod --server-side
+
+      - name: Wait for rollout
+        run: |
+          kubectl rollout status statefulset/vcache -n voidcache --timeout=300s
+          kubectl rollout status deployment/vcache-haproxy -n voidcache --timeout=120s
+
+      - name: Verify cluster health post-deploy
+        run: |
+          READY=$(kubectl get pods -n voidcache \
+            -l app.kubernetes.io/component=cache \
+            --field-selector=status.phase=Running \
+            -o jsonpath='{.items[*].status.containerStatuses[0].ready}' | tr ' ' '\n' | grep -c true)
+          echo "Ready pods: $READY"
+          [ "$READY" -ge 2 ] || (echo "FAIL: fewer than 2 pods ready" && exit 1)
+
+      - name: Create GitHub release notes
+        uses: softprops/action-gh-release@v1
+        with:
+          body: |
+            ## VoidCache ${{ github.ref_name }}
+
+            Docker image: `ghcr.io/${{ github.repository_owner }}/voidcache:${{ github.ref_name }}`
+            Digest: `${{ needs.docker.outputs.image-digest }}`
+
+            ### Deploy
+            ```bash
+            kubectl apply -k k8s/overlays/prod
+            kubectl rollout status statefulset/vcache -n voidcache
+            ```

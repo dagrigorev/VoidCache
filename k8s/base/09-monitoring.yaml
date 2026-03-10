@@ -1,0 +1,179 @@
+---
+# ServiceMonitor — tells Prometheus Operator to scrape VoidCache health
+# Requires: kube-prometheus-stack or prometheus-operator installed.
+#   helm repo add prometheus-community https://prometheus-community.github.io/helm-charts
+#   helm install kube-prom prometheus-community/kube-prometheus-stack -n monitoring
+#
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: vcache-monitor
+  namespace: voidcache
+  labels:
+    app.kubernetes.io/name: voidcache
+    # Must match the Prometheus Operator's serviceMonitorSelector label
+    release: kube-prom
+spec:
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: voidcache
+      app.kubernetes.io/component: proxy
+  namespaceSelector:
+    matchNames: [voidcache]
+  endpoints:
+    - port: stats
+      path: /stats
+      scheme: http
+      interval: 15s
+      scrapeTimeout: 10s
+      # HAProxy stats CSV endpoint — use haproxy_exporter as a sidecar for richer metrics
+      # See: https://github.com/prometheus/haproxy_exporter
+
+---
+# PrometheusRule — alerts for the VoidCache cluster
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: vcache-alerts
+  namespace: voidcache
+  labels:
+    app.kubernetes.io/name: voidcache
+    release: kube-prom
+spec:
+  groups:
+    - name: voidcache.cache
+      interval: 30s
+      rules:
+        # Alert when a cache pod is not ready
+        - alert: VoidCachePodNotReady
+          expr: |
+            kube_pod_status_ready{namespace="voidcache", condition="true",
+              pod=~"vcache-[0-9]+"} == 0
+          for: 2m
+          labels:
+            severity: critical
+          annotations:
+            summary: "VoidCache pod {{ $labels.pod }} is not ready"
+            description: "Pod {{ $labels.pod }} has been not-ready for 2 minutes."
+
+        # Alert when fewer than 2 pods are running (below quorum)
+        - alert: VoidCacheClusterDegraded
+          expr: |
+            count(kube_pod_status_ready{namespace="voidcache", condition="true",
+              pod=~"vcache-[0-9]+"} == 1) < 2
+          for: 1m
+          labels:
+            severity: critical
+          annotations:
+            summary: "VoidCache cluster below quorum"
+            description: "Fewer than 2 cache nodes are ready — cluster may be degraded."
+
+        # Alert when a PVC is almost full
+        - alert: VoidCacheDiskFull
+          expr: |
+            kubelet_volume_stats_used_bytes{namespace="voidcache",
+              persistentvolumeclaim=~"data-vcache-[0-9]+"} /
+            kubelet_volume_stats_capacity_bytes{namespace="voidcache",
+              persistentvolumeclaim=~"data-vcache-[0-9]+"} > 0.85
+          for: 5m
+          labels:
+            severity: warning
+          annotations:
+            summary: "VoidCache PVC {{ $labels.persistentvolumeclaim }} is 85% full"
+            description: "WAL disk usage exceeds 85% on {{ $labels.persistentvolumeclaim }}."
+
+        # Alert when HAProxy has no healthy backends
+        - alert: VoidCacheNoHealthyBackends
+          expr: |
+            kube_deployment_status_replicas_ready{namespace="voidcache",
+              deployment="vcache-haproxy"} == 0
+          for: 1m
+          labels:
+            severity: critical
+          annotations:
+            summary: "VoidCache HAProxy has no ready replicas"
+            description: "All HAProxy pods are down — VoidCache is unreachable."
+
+---
+# Grafana Dashboard as a ConfigMap
+# Grafana Operator or sidecar picks this up automatically when labeled correctly.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: vcache-grafana-dashboard
+  namespace: voidcache
+  labels:
+    app.kubernetes.io/name: voidcache
+    grafana_dashboard: "1"    # grafana sidecar picks up ConfigMaps with this label
+data:
+  voidcache-dashboard.json: |
+    {
+      "title": "VoidCache Cluster",
+      "uid": "voidcache-cluster",
+      "tags": ["voidcache", "cache"],
+      "schemaVersion": 38,
+      "time": { "from": "now-1h", "to": "now" },
+      "refresh": "15s",
+      "panels": [
+        {
+          "id": 1, "type": "stat", "title": "Ready Cache Pods",
+          "gridPos": { "x": 0, "y": 0, "w": 4, "h": 4 },
+          "targets": [{
+            "expr": "count(kube_pod_status_ready{namespace=\"voidcache\", condition=\"true\", pod=~\"vcache-[0-9]+\"} == 1)",
+            "legendFormat": "Ready"
+          }],
+          "fieldConfig": {
+            "defaults": {
+              "thresholds": {
+                "mode": "absolute",
+                "steps": [
+                  {"color": "red", "value": null},
+                  {"color": "yellow", "value": 1},
+                  {"color": "green", "value": 3}
+                ]
+              }
+            }
+          }
+        },
+        {
+          "id": 2, "type": "stat", "title": "HAProxy Ready Replicas",
+          "gridPos": { "x": 4, "y": 0, "w": 4, "h": 4 },
+          "targets": [{
+            "expr": "kube_deployment_status_replicas_ready{namespace=\"voidcache\", deployment=\"vcache-haproxy\"}",
+            "legendFormat": "HAProxy"
+          }]
+        },
+        {
+          "id": 3, "type": "timeseries", "title": "Pod CPU Usage",
+          "gridPos": { "x": 0, "y": 4, "w": 12, "h": 8 },
+          "targets": [{
+            "expr": "rate(container_cpu_usage_seconds_total{namespace=\"voidcache\", pod=~\"vcache-[0-9]+\", container=\"vcache\"}[2m])",
+            "legendFormat": "{{ pod }}"
+          }]
+        },
+        {
+          "id": 4, "type": "timeseries", "title": "Pod Memory (RSS)",
+          "gridPos": { "x": 12, "y": 4, "w": 12, "h": 8 },
+          "targets": [{
+            "expr": "container_memory_rss{namespace=\"voidcache\", pod=~\"vcache-[0-9]+\", container=\"vcache\"}",
+            "legendFormat": "{{ pod }}"
+          }]
+        },
+        {
+          "id": 5, "type": "timeseries", "title": "PVC Usage",
+          "gridPos": { "x": 0, "y": 12, "w": 12, "h": 8 },
+          "targets": [{
+            "expr": "kubelet_volume_stats_used_bytes{namespace=\"voidcache\", persistentvolumeclaim=~\"data-vcache-[0-9]+\"} / 1e9",
+            "legendFormat": "{{ persistentvolumeclaim }} (GB)"
+          }]
+        },
+        {
+          "id": 6, "type": "timeseries", "title": "Pod Restarts",
+          "gridPos": { "x": 12, "y": 12, "w": 12, "h": 8 },
+          "targets": [{
+            "expr": "increase(kube_pod_container_status_restarts_total{namespace=\"voidcache\"}[1h])",
+            "legendFormat": "{{ pod }}"
+          }]
+        }
+      ]
+    }

@@ -1,0 +1,215 @@
+# docker-compose.yml  –  VoidCache 3-node cluster
+#
+# Topology:
+#
+#   client
+#     │
+#   haproxy :6379  (load-balances, health-checks, slot-aware routing)
+#     │
+#   ┌──────────────┬──────────────┬──────────────┐
+#   │  vcache-1    │  vcache-2    │  vcache-3    │
+#   │  :6379       │  :6379       │  :6379       │
+#   │  slots 0-5460│  5461-10922  │  10923-16383 │
+#   └──────────────┴──────────────┴──────────────┘
+#
+# Quick start:
+#   docker compose up -d
+#   docker compose exec vcache-1 vcli -h vcache-1 -p 6379 PING
+#
+# With TLS:
+#   docker compose --profile tls up -d
+#
+# Scale (add more nodes):
+#   docker compose up -d --scale vcache-extra=2
+#
+# Tear down:
+#   docker compose down -v
+
+name: voidcache
+
+# ── Shared config ─────────────────────────────────────────────────────────────
+x-vcache-common: &vcache-common
+  build:
+    context: ..
+    dockerfile: Dockerfile
+  restart: unless-stopped
+  environment:
+    VC_CLUSTER: "yes"
+    VC_MAXMEMORY: "${VC_MAXMEMORY:-512m}"
+    VC_THREADS: "${VC_THREADS:-4}"
+    VC_PASSWORD: "${VC_PASSWORD:-}"
+    VC_NO_WAL: "${VC_NO_WAL:-0}"
+  volumes:
+    - ./config/vcache.acl:/vcache/config/vcache.acl:ro
+  networks:
+    - vcache-net
+  ulimits:
+    nofile:
+      soft: 65536
+      hard: 65536
+  sysctls:
+    net.core.somaxconn: 1024
+
+# ── Services ──────────────────────────────────────────────────────────────────
+services:
+
+  # ── Node 1 ──────────────────────────────────────────────────────────────────
+  vcache-1:
+    <<: *vcache-common
+    container_name: vcache-1
+    hostname: vcache-1
+    environment:
+      VC_CLUSTER: "yes"
+      VC_MAXMEMORY: "${VC_MAXMEMORY:-512m}"
+      VC_THREADS: "${VC_THREADS:-4}"
+      VC_PASSWORD: "${VC_PASSWORD:-}"
+      VC_NO_WAL: "${VC_NO_WAL:-0}"
+      VC_ANNOUNCE_ADDR: "vcache-1"
+      VC_ANNOUNCE_PORT: "6379"
+    volumes:
+      - vcache-1-data:/vcache/data
+      - ./config/vcache.acl:/vcache/config/vcache.acl:ro
+    ports:
+      - "6381:6379"
+    healthcheck:
+      test: ["CMD", "vcli", "-h", "127.0.0.1", "-p", "6379", "--no-color", "PING"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+      start_period: 5s
+
+  # ── Node 2 ──────────────────────────────────────────────────────────────────
+  vcache-2:
+    <<: *vcache-common
+    container_name: vcache-2
+    hostname: vcache-2
+    environment:
+      VC_CLUSTER: "yes"
+      VC_MAXMEMORY: "${VC_MAXMEMORY:-512m}"
+      VC_THREADS: "${VC_THREADS:-4}"
+      VC_PASSWORD: "${VC_PASSWORD:-}"
+      VC_NO_WAL: "${VC_NO_WAL:-0}"
+      VC_ANNOUNCE_ADDR: "vcache-2"
+      VC_ANNOUNCE_PORT: "6379"
+    volumes:
+      - vcache-2-data:/vcache/data
+      - ./config/vcache.acl:/vcache/config/vcache.acl:ro
+    ports:
+      - "6382:6379"
+    healthcheck:
+      test: ["CMD", "vcli", "-h", "127.0.0.1", "-p", "6379", "--no-color", "PING"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+      start_period: 5s
+
+  # ── Node 3 ──────────────────────────────────────────────────────────────────
+  vcache-3:
+    <<: *vcache-common
+    container_name: vcache-3
+    hostname: vcache-3
+    environment:
+      VC_CLUSTER: "yes"
+      VC_MAXMEMORY: "${VC_MAXMEMORY:-512m}"
+      VC_THREADS: "${VC_THREADS:-4}"
+      VC_PASSWORD: "${VC_PASSWORD:-}"
+      VC_NO_WAL: "${VC_NO_WAL:-0}"
+      VC_ANNOUNCE_ADDR: "vcache-3"
+      VC_ANNOUNCE_PORT: "6379"
+    volumes:
+      - vcache-3-data:/vcache/data
+      - ./config/vcache.acl:/vcache/config/vcache.acl:ro
+    ports:
+      - "6383:6379"
+    healthcheck:
+      test: ["CMD", "vcli", "-h", "127.0.0.1", "-p", "6379", "--no-color", "PING"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+      start_period: 5s
+
+  # ── HAProxy — load balancer + health-check ────────────────────────────────
+  haproxy:
+    image: haproxy:2.9-alpine
+    container_name: vcache-haproxy
+    restart: unless-stopped
+    ports:
+      - "${VC_PORT:-6379}:6379"     # main client port
+      - "8404:8404"                  # HAProxy stats UI
+    volumes:
+      - ./haproxy/haproxy.cfg:/usr/local/etc/haproxy/haproxy.cfg:ro
+    networks:
+      - vcache-net
+    # HAProxy starts after the cache containers are created (not necessarily healthy).
+    # init-addr none in haproxy.cfg means it resolves backends via Docker DNS at
+    # runtime, so it won't crash if a node isn't ready when HAProxy first boots.
+    depends_on:
+      - vcache-1
+      - vcache-2
+      - vcache-3
+    healthcheck:
+      test: ["CMD", "haproxy", "-c", "-f", "/usr/local/etc/haproxy/haproxy.cfg"]
+      interval: 10s
+      timeout: 3s
+      retries: 3
+
+  # ── TLS certificate generator (runs once, then exits) ────────────────────
+  # Profile: tls  →  docker compose --profile tls up
+  cert-gen:
+    image: alpine/openssl:latest
+    container_name: vcache-cert-gen
+    profiles: ["tls"]
+    volumes:
+      - ./tls:/tls
+    entrypoint: >
+      sh -c "
+        if [ ! -f /tls/server.crt ]; then
+          echo 'Generating self-signed TLS cert...';
+          openssl req -x509 -newkey rsa:4096 -days 3650 -nodes
+            -keyout /tls/server.key
+            -out    /tls/server.crt
+            -subj   '/CN=voidcache'
+            -addext 'subjectAltName=DNS:vcache-1,DNS:vcache-2,DNS:vcache-3,DNS:haproxy,DNS:localhost,IP:127.0.0.1';
+          chmod 644 /tls/server.crt /tls/server.key;
+          echo 'TLS cert generated at /tls/';
+        else
+          echo 'TLS cert already exists, skipping.';
+        fi
+      "
+
+  # ── Prometheus metrics exporter (optional) ────────────────────────────────
+  # Profile: monitoring  →  docker compose --profile monitoring up
+  vcache-exporter:
+    image: alpine:3.19
+    container_name: vcache-exporter
+    profiles: ["monitoring"]
+    networks:
+      - vcache-net
+    depends_on:
+      - haproxy
+    entrypoint: >
+      sh -c "
+        apk add --no-cache curl &&
+        while true; do
+          sleep 15
+          echo '# VoidCache metrics scrape'
+          curl -s http://haproxy:8404/stats?stats;csv 2>/dev/null | head -5
+        done
+      "
+
+# ── Volumes ───────────────────────────────────────────────────────────────────
+volumes:
+  vcache-1-data:
+    driver: local
+  vcache-2-data:
+    driver: local
+  vcache-3-data:
+    driver: local
+
+# ── Network ───────────────────────────────────────────────────────────────────
+networks:
+  vcache-net:
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 172.28.0.0/24

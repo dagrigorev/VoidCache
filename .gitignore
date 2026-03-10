@@ -50,3 +50,5 @@ vgcore.*
 /tmp/
 dbg*
 diag*
+
+.env.secret

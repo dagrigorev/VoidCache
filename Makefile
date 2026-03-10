@@ -5,9 +5,12 @@ CFLAGS  := -O3 -march=native -funroll-loops -std=c11 \
            -Wno-unused-function -Wno-unused-parameter
 LDFLAGS := -lpthread -lm
 
-# OpenSSL 3.x shared libraries (no -dev package needed, link directly)
-SSL_LIBS := /usr/lib/x86_64-linux-gnu/libssl.so.3 \
-            /usr/lib/x86_64-linux-gnu/libcrypto.so.3
+# OpenSSL link flags.
+# - With libssl-dev installed (Docker builder, dev machines): pkg-config resolves to -lssl -lcrypto
+# - Without libssl-dev (runtime-only): fall back to direct .so.3 path
+SSL_LIBS := $(shell pkg-config --libs openssl 2>/dev/null || echo "-lssl -lcrypto")
+# Uncomment the line below only if pkg-config is unavailable AND libssl-dev is not installed:
+# SSL_LIBS := /usr/lib/x86_64-linux-gnu/libssl.so.3 /usr/lib/x86_64-linux-gnu/libcrypto.so.3
 
 CORE_SRC  := src/voidcache.c
 NET_SRC   := net/proto.c net/auth.c net/commands.c net/server.c net/cluster.c
@@ -21,7 +24,7 @@ all: vcli voidcache_test voidcache_bench
 
 # Main binary: server + CLI combined
 vcli: $(CORE_SRC) $(NET_SRC) $(CLI_SRC)
-	$(CC) $(CFLAGS) $^ -o $@ $(SSL_LIBS) $(LDFLAGS)
+	$(CC) $(CFLAGS) $^ -o $@ $(LDFLAGS) $(SSL_LIBS)
 
 # Unit + stress tests (no network layer)
 voidcache_test: $(CORE_SRC) $(TEST_SRC)

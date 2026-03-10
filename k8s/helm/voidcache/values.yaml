@@ -1,0 +1,129 @@
+# values.yaml  —  VoidCache Helm chart defaults
+# Override with:  helm install voidcache ./k8s/helm/voidcache -f my-values.yaml
+
+# ── Image ──────────────────────────────────────────────────────────────────────
+image:
+  repository: ghcr.io/yourorg/voidcache
+  tag: "2.0.0"
+  pullPolicy: IfNotPresent
+  pullSecrets: []
+
+# ── Cache cluster ──────────────────────────────────────────────────────────────
+cache:
+  replicas: 3               # must be odd for quorum (3, 5, 7…)
+  maxMemory: "512m"         # per-node memory cap (k/m/g)
+  threads: 4                # worker threads per node
+  walEnabled: true          # WAL persistence; false = pure in-memory
+  clusterEnabled: true      # enable Redis Cluster protocol
+
+  resources:
+    requests:
+      cpu: "500m"
+      memory: "600Mi"
+    limits:
+      cpu: "2000m"
+      memory: "1Gi"
+
+  persistence:
+    enabled: true
+    size: "10Gi"
+    storageClass: ""        # "" = cluster default; "fast-ssd" for production
+    accessMode: ReadWriteOnce
+    retainOnDelete: true    # keep PVCs when chart is deleted
+
+  affinity:
+    podAntiAffinity:
+      required: true        # hard anti-affinity: no two pods on same node
+                            # set false to relax (preferred) for single-node dev
+
+# ── Auth ───────────────────────────────────────────────────────────────────────
+auth:
+  enabled: false
+  # Simple password auth (Redis-compatible)
+  password: ""
+  # OR: reference an existing Secret with key VC_PASSWORD
+  existingSecret: ""
+  existingSecretKey: "VC_PASSWORD"
+  # ACL file contents (multiline string)
+  aclFile: |
+    # admin (password: adminpass)
+    admin 11a03d33e61fa9f0a0cdce9ea5e4dc1f5e6a26e2f19a7c34b6a8b5d8e0f3c2a1 *
+    # app   (password: apppass)
+    app   5e884898da28047151d0e56f8dc6292773603d0d6aabbdd62a11ef721d1542d8 rw
+
+# ── HAProxy load balancer ──────────────────────────────────────────────────────
+haproxy:
+  enabled: true
+  replicas: 2
+  image:
+    repository: haproxy
+    tag: "2.9-alpine"
+    pullPolicy: IfNotPresent
+  resources:
+    requests:
+      cpu: "100m"
+      memory: "64Mi"
+    limits:
+      cpu: "500m"
+      memory: "256Mi"
+  stats:
+    enabled: true
+    username: admin
+    password: admin         # change in production
+
+# ── Service ────────────────────────────────────────────────────────────────────
+service:
+  type: ClusterIP           # ClusterIP | NodePort | LoadBalancer
+  port: 6379
+  nodePort: ""              # set when type=NodePort, e.g. 30379
+  annotations: {}
+  # AWS NLB example:
+  # annotations:
+  #   service.beta.kubernetes.io/aws-load-balancer-type: "nlb"
+
+# ── TLS (cert-manager) ─────────────────────────────────────────────────────────
+tls:
+  enabled: false
+  # "selfsigned" | "letsencrypt" | "existing"
+  issuerType: selfsigned
+  # For letsencrypt:
+  acme:
+    email: "you@example.com"
+    server: "https://acme-v02.api.letsencrypt.org/directory"
+  # For existing secret:
+  existingSecret: ""
+
+# ── Monitoring ─────────────────────────────────────────────────────────────────
+metrics:
+  enabled: false            # create ServiceMonitor (requires prometheus-operator)
+  serviceMonitor:
+    interval: "15s"
+    scrapeTimeout: "10s"
+    labels:
+      release: kube-prom    # must match your Prometheus Operator's selector
+
+# ── Network Policy ─────────────────────────────────────────────────────────────
+networkPolicy:
+  enabled: true
+
+# ── PodDisruptionBudget ────────────────────────────────────────────────────────
+podDisruptionBudget:
+  enabled: true
+  minAvailable: 2           # keep 2/3 pods during disruptions
+
+# ── HPA (HAProxy only) ────────────────────────────────────────────────────────
+autoscaling:
+  enabled: false
+  minReplicas: 2
+  maxReplicas: 6
+  targetCPUUtilizationPercentage: 70
+
+# ── Security ───────────────────────────────────────────────────────────────────
+securityContext:
+  runAsNonRoot: true
+  runAsUser: 999
+  runAsGroup: 999
+  fsGroup: 999
+
+# ── Namespace ──────────────────────────────────────────────────────────────────
+namespaceOverride: ""       # defaults to Release.Namespace

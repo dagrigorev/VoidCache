@@ -1,0 +1,168 @@
+---
+# Headless Service for stable pod DNS
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "voidcache.headlessService" . }}
+  namespace: {{ include "voidcache.namespace" . }}
+  labels:
+    {{- include "voidcache.labels" . | nindent 4 }}
+    app.kubernetes.io/component: cache
+spec:
+  clusterIP: None
+  selector:
+    {{- include "voidcache.selectorLabels" . | nindent 4 }}
+    app.kubernetes.io/component: cache
+  ports:
+    - name: resp
+      port: 6379
+      targetPort: 6379
+  publishNotReadyAddresses: false
+
+---
+# Client-facing Service (HAProxy)
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "voidcache.fullname" . }}
+  namespace: {{ include "voidcache.namespace" . }}
+  labels:
+    {{- include "voidcache.labels" . | nindent 4 }}
+    app.kubernetes.io/component: proxy
+  {{- with .Values.service.annotations }}
+  annotations:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+spec:
+  type: {{ .Values.service.type }}
+  selector:
+    {{- include "voidcache.selectorLabels" . | nindent 4 }}
+    app.kubernetes.io/component: proxy
+  ports:
+    - name: resp
+      port: {{ .Values.service.port }}
+      targetPort: 6379
+      {{- if and (eq .Values.service.type "NodePort") .Values.service.nodePort }}
+      nodePort: {{ .Values.service.nodePort }}
+      {{- end }}
+    {{- if .Values.haproxy.stats.enabled }}
+    - name: stats
+      port: 8404
+      targetPort: 8404
+    {{- end }}
+
+---
+# ConfigMap: ACL + HAProxy config
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "voidcache.fullname" . }}-config
+  namespace: {{ include "voidcache.namespace" . }}
+  labels:
+    {{- include "voidcache.labels" . | nindent 4 }}
+data:
+  vcache.acl: |
+    {{- .Values.auth.aclFile | nindent 4 }}
+  haproxy.cfg: |
+    global
+      maxconn 50000
+      log stdout format raw local0
+
+    defaults
+      mode tcp
+      log global
+      option tcplog
+      option dontlognull
+      retries 3
+      timeout connect 3s
+      timeout client 5m
+      timeout server 5m
+      timeout check 2s
+
+    frontend stats
+      bind *:8404
+      mode http
+      stats enable
+      stats uri /stats
+      stats realm VoidCache\ HAProxy
+      stats auth {{ .Values.haproxy.stats.username }}:{{ .Values.haproxy.stats.password }}
+      stats refresh 5s
+
+    frontend vcache_frontend
+      bind *:6379
+      default_backend vcache_nodes
+
+    backend vcache_nodes
+      balance leastconn
+      option tcp-check
+      tcp-check send "PING\r\n"
+      tcp-check expect string "+PONG"
+      {{- range $i, $e := until (.Values.cache.replicas | int) }}
+      server {{ include "voidcache.fullname" $ }}-{{ $i }} {{ include "voidcache.fullname" $ }}-{{ $i }}.{{ include "voidcache.headlessService" $ }}.{{ include "voidcache.namespace" $ }}.svc.cluster.local:6379 check inter 5s fall 3 rise 2 weight 10
+      {{- end }}
+
+---
+# HAProxy Deployment
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "voidcache.fullname" . }}-haproxy
+  namespace: {{ include "voidcache.namespace" . }}
+  labels:
+    {{- include "voidcache.labels" . | nindent 4 }}
+    app.kubernetes.io/component: proxy
+spec:
+  replicas: {{ .Values.haproxy.replicas }}
+  selector:
+    matchLabels:
+      {{- include "voidcache.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: proxy
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxSurge: 1
+      maxUnavailable: 0
+  template:
+    metadata:
+      labels:
+        {{- include "voidcache.selectorLabels" . | nindent 8 }}
+        app.kubernetes.io/component: proxy
+      annotations:
+        checksum/config: {{ include (print $.Template.BasePath "/services.yaml") . | sha256sum }}
+    spec:
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 99
+        runAsGroup: 99
+      containers:
+        - name: haproxy
+          image: {{ .Values.haproxy.image.repository }}:{{ .Values.haproxy.image.tag }}
+          imagePullPolicy: {{ .Values.haproxy.image.pullPolicy }}
+          ports:
+            - name: resp
+              containerPort: 6379
+            - name: stats
+              containerPort: 8404
+          volumeMounts:
+            - name: haproxy-config
+              mountPath: /usr/local/etc/haproxy
+              readOnly: true
+          livenessProbe:
+            tcpSocket: { port: 6379 }
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          readinessProbe:
+            httpGet: { path: /stats, port: 8404 }
+            initialDelaySeconds: 5
+            periodSeconds: 5
+          resources:
+            {{- toYaml .Values.haproxy.resources | nindent 12 }}
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: ["ALL"]
+              add: ["NET_BIND_SERVICE"]
+      volumes:
+        - name: haproxy-config
+          configMap:
+            name: {{ include "voidcache.fullname" . }}-config

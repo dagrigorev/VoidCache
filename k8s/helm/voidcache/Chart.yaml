@@ -1,0 +1,20 @@
+apiVersion: v2
+name: voidcache
+description: VoidCache — high-performance in-memory cache with Redis-compatible RESP3 protocol
+type: application
+version: "2.0.0"
+appVersion: "2.0.0"
+keywords:
+  - cache
+  - redis
+  - in-memory
+  - voidcache
+home: https://github.com/yourorg/voidcache
+sources:
+  - https://github.com/yourorg/voidcache
+maintainers:
+  - name: yourorg
+    email: you@example.com
+annotations:
+  artifacthub.io/license: MIT
+  artifacthub.io/category: database

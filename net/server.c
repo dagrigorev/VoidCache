@@ -1,18 +1,29 @@
 /*
  * net/server.c  –  VoidCache network server implementation.
  *
- * Event model: epoll edge-triggered.
- * Threading: one accept thread + N worker threads, each with own epoll.
- * TLS: OpenSSL 3.x, non-blocking handshake driven by the event loop.
- * Connection distribution: SO_REUSEPORT so all workers can accept directly.
+ * Event model: epoll edge-triggered (Linux) / wepoll (Windows/MSYS2).
+ * Threading: worker threads, each with own epoll fd.
+ * TLS: OpenSSL 3.x, non-blocking handshake driven by event loop.
+ * Connection distribution: SO_REUSEPORT (Linux) / SO_REUSEADDR (Windows).
  */
-#define _POSIX_C_SOURCE 200809L
-#define _GNU_SOURCE
+#ifndef _WIN32
+# define _POSIX_C_SOURCE 200809L
+# define _GNU_SOURCE
+#endif
+
 #include "server.h"
 #include "commands.h"
 #include "proto.h"
 #include "auth.h"
 #include "vc_ssl_abi.h"
+
+#ifdef _WIN32
+# include "../compat/windows.h"
+# include "../compat/wepoll.h"
+#else
+# include <sys/epoll.h>
+# include <signal.h>
+#endif
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -20,11 +31,9 @@
 #include <unistd.h>
 #include <fcntl.h>
 #include <errno.h>
-#include <signal.h>
 #include <time.h>
 
 #include <sys/socket.h>
-#include <sys/epoll.h>
 #include <netinet/in.h>
 #include <netinet/tcp.h>
 #include <arpa/inet.h>

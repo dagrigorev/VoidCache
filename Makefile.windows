@@ -1,0 +1,105 @@
+# Makefile.windows  —  VoidCache build for Windows (MSYS2 / UCRT64)
+#
+# Open in MSYS2 UCRT64 terminal and run:
+#   make -f Makefile.windows
+#   make -f Makefile.windows test
+#   make -f Makefile.windows smoke
+#
+# Prerequisites (install once):
+#   pacman -S mingw-w64-ucrt-x86_64-gcc \
+#             mingw-w64-ucrt-x86_64-openssl \
+#             mingw-w64-ucrt-x86_64-wepoll \
+#             make
+# ─────────────────────────────────────────────────────────────────────────────
+
+CC      := gcc
+CFLAGS  := -O2 -std=c11 \
+           -Iinclude -Inet -Icompat \
+           -D_WIN32_WINNT=0x0A00 \
+           -DVCACHE_WINDOWS \
+           -Wall -Wextra \
+           -Wno-unused-function -Wno-unused-parameter
+
+# OpenSSL from MSYS2 pacman
+OPENSSL_PREFIX := $(MSYSTEM_PREFIX)
+CFLAGS  += -I$(OPENSSL_PREFIX)/include
+
+LDFLAGS := -L$(OPENSSL_PREFIX)/lib \
+           -lssl -lcrypto \
+           -lpthread \
+           -lws2_32 -lbcrypt \
+           -lm
+
+CORE_SRC  := src/voidcache.c
+NET_SRC   := net/proto.c net/auth.c net/commands.c net/server.c net/cluster.c
+CLI_SRC   := cli/vcli.c
+TEST_SRC  := tests/test_voidcache.c
+BENCH_SRC := bench/benchmark.c
+
+TARGET    := vcli.exe
+TEST_BIN  := voidcache_test.exe
+BENCH_BIN := voidcache_bench.exe
+
+.PHONY: all vcli test bench smoke clean deps
+
+all: vcli test bench
+
+# ── Install prerequisites ──────────────────────────────────────────────────
+deps:
+	pacman -S --noconfirm --needed \
+	  mingw-w64-ucrt-x86_64-gcc \
+	  mingw-w64-ucrt-x86_64-openssl \
+	  mingw-w64-ucrt-x86_64-wepoll \
+	  make
+	@echo "Dependencies installed. Run: make -f Makefile.windows"
+
+# ── Main binary ────────────────────────────────────────────────────────────
+vcli: $(CORE_SRC) $(NET_SRC) $(CLI_SRC)
+	$(CC) $(CFLAGS) $^ -o $(TARGET) $(LDFLAGS)
+	@echo "Built: $(TARGET)"
+
+# ── Tests (no network layer) ───────────────────────────────────────────────
+$(TEST_BIN): $(CORE_SRC) $(TEST_SRC)
+	$(CC) $(CFLAGS) $^ -o $@ -lpthread -lm
+	@echo "Built: $(TEST_BIN)"
+
+test: $(TEST_BIN)
+	./$(TEST_BIN)
+
+# ── Benchmark ─────────────────────────────────────────────────────────────
+$(BENCH_BIN): $(CORE_SRC) $(BENCH_SRC)
+	$(CC) $(CFLAGS) $^ -o $@ -lpthread -lm
+	@echo "Built: $(BENCH_BIN)"
+
+bench: $(BENCH_BIN)
+	./$(BENCH_BIN)
+
+# ── Smoke test ─────────────────────────────────────────────────────────────
+smoke: vcli
+	@echo "Starting server on :16399..."
+	./$(TARGET) server --port 16399 &
+	sleep 1
+	@echo "--- PING ---"
+	./$(TARGET) -p 16399 --no-color PING
+	@echo "--- SET/GET ---"
+	./$(TARGET) -p 16399 --no-color SET hello world
+	./$(TARGET) -p 16399 --no-color GET hello
+	@echo "--- VCSET int ---"
+	./$(TARGET) -p 16399 --no-color VCSET score int 42
+	./$(TARGET) -p 16399 --no-color VCGET score
+	@echo "Stopping server..."
+	./$(TARGET) -p 16399 --no-color SHUTDOWN NOSAVE 2>/dev/null || true
+
+clean:
+	rm -f $(TARGET) $(TEST_BIN) $(BENCH_BIN) *.exe
+
+# ── Copy OpenSSL DLLs next to the binary (needed to run outside MSYS2) ──────
+bundle:
+	@echo "Copying OpenSSL DLLs for standalone distribution..."
+	cp $(OPENSSL_PREFIX)/bin/libssl-3-x64.dll   . 2>/dev/null || \
+	cp $(OPENSSL_PREFIX)/bin/libssl*.dll         . 2>/dev/null || true
+	cp $(OPENSSL_PREFIX)/bin/libcrypto-3-x64.dll . 2>/dev/null || \
+	cp $(OPENSSL_PREFIX)/bin/libcrypto*.dll       . 2>/dev/null || true
+	cp $(OPENSSL_PREFIX)/bin/libgcc_s_seh-1.dll  . 2>/dev/null || true
+	cp $(OPENSSL_PREFIX)/bin/libwinpthread-1.dll  . 2>/dev/null || true
+	@echo "DLLs copied. You can now run vcli.exe from any folder."
