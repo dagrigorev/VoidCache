@@ -1,0 +1,59 @@
+# vcache.conf  –  VoidCache Server Configuration
+#
+# Start with:  ./vcli server --port 6379
+# Or load this file by passing flags directly (all options are CLI flags).
+#
+# ─────────────────────────────────────────────────────────────────────────────
+
+# ── Network ───────────────────────────────────────────────────────────────────
+
+# TCP port (default: 6379 — drop-in Redis replacement)
+port 6379
+
+# Bind address (default: 0.0.0.0)
+# bind 127.0.0.1
+
+# Worker threads (default: 4).  Set to number of CPU cores for best throughput.
+# threads 8
+
+# ── TLS (optional) ────────────────────────────────────────────────────────────
+# Provide cert + key to enable TLS 1.2/1.3.
+# Clients connect with:  ./vcli --tls -h host -p port
+# Or use stunnel/nginx as a TLS proxy (no cert needed here).
+#
+# tls-cert /etc/vcache/server.crt
+# tls-key  /etc/vcache/server.key
+
+# ── Authentication ────────────────────────────────────────────────────────────
+
+# Simple password (Redis-compatible AUTH <password>).
+# Maps to a built-in "default" user with rwa permissions.
+# requirepass your_strong_password_here
+
+# Full ACL file (see vcache.acl.example for format).
+# When set, requirepass is ignored in favor of the ACL file.
+# acl-file /etc/vcache/vcache.acl
+
+# ── Memory ────────────────────────────────────────────────────────────────────
+
+# Soft memory cap.  When exceeded, CLOCK eviction reclaims entries.
+# Supports suffixes: k, m, g  (e.g. 512m, 2g)
+# maxmemory 256m
+
+# ── Persistence (WAL) ─────────────────────────────────────────────────────────
+
+# Write-Ahead Log path.  Every SET/DEL is persisted before in-memory mutation.
+# On restart, replay the WAL to recover state.
+# Leave unset for pure in-memory mode (fastest, no durability).
+# wal /var/lib/vcache/vcache.wal
+
+# ── Cluster ───────────────────────────────────────────────────────────────────
+
+# Enable Redis Cluster protocol.  Clients with cluster-aware drivers route
+# automatically.  Run multiple vcli server instances and they announce
+# themselves via CLUSTER NODES.
+# cluster yes
+
+# Address and port this node announces to peers and clients.
+# announce-addr 10.0.0.1
+# announce-port 6379

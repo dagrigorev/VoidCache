@@ -274,3 +274,205 @@ All public functions are thread-safe.
 ## License
 
 MIT License — see `LICENSE`.
+
+---
+
+## Network Layer
+
+### Starting the Server
+
+```bash
+# Quick start (no auth, plain TCP, port 6379)
+./vcli server
+
+# With password and custom port
+./vcli server --port 6379 --requirepass mysecret
+
+# With TLS
+./vcli server --port 6380 --tls-cert server.crt --tls-key server.key
+
+# With ACL file, WAL persistence, 2 GB memory cap, 8 threads
+./vcli server --port 6379 \
+  --acl-file vcache.acl \
+  --maxmemory 2g \
+  --wal /var/lib/vcache/vcache.wal \
+  --threads 8
+```
+
+### CLI Usage
+
+```bash
+# Interactive REPL
+./vcli
+./vcli -h 10.0.0.1 -p 6379 -a password
+
+# Single command
+./vcli PING
+./vcli SET mykey myvalue
+./vcli GET mykey
+
+# Batch / pipe mode
+echo -e "SET k1 v1\nSET k2 v2\nMGET k1 k2" | ./vcli --pipe
+
+# TLS connection
+./vcli --tls -h myserver.com -p 6380 PING
+
+# Cluster mode (routes keys to correct node automatically)
+./vcli --cluster -h 10.0.0.1 -p 6379 GET mykey
+```
+
+### VoidCache Extended Commands
+
+These commands are extensions beyond the Redis command set. Any Redis driver
+can send them as plain string commands:
+
+| Command | Syntax | Description |
+|---|---|---|
+| `VCSET` | `VCSET key type value` | Store a typed value |
+| `VCGET` | `VCGET key` | Get value with type metadata |
+| `VCINFO` | `VCINFO` | Server info as JSON |
+
+**Types for VCSET:** `int`, `float`, `bool`, `json`, `binary`, `string`
+
+```
+127.0.0.1:6379> VCSET score int 42
+OK
+127.0.0.1:6379> VCGET score
+(map)
+   key: "type"
+   val: "int"
+   key: "value"
+   val: (integer) 42
+
+127.0.0.1:6379> VCSET config json {"timeout":30,"retries":3}
+OK
+127.0.0.1:6379> VCGET config
+(map)
+   key: "type"
+   val: "json"
+   key: "value"
+   val: {"timeout":30,"retries":3}
+
+127.0.0.1:6379> VCSET flag bool true
+OK
+127.0.0.1:6379> VCGET flag
+(map)
+   key: "type"
+   val: "bool"
+   key: "value"
+   val: (boolean) true
+```
+
+### Redis Driver Compatibility
+
+VoidCache speaks RESP3 and is compatible with any Redis client:
+
+```python
+# Python (redis-py)
+import redis
+r = redis.Redis(host='localhost', port=6379)
+r.set('key', 'value')
+r.get('key')
+
+# Node.js (ioredis)
+const Redis = require('ioredis')
+const r = new Redis({ host: 'localhost', port: 6379 })
+await r.set('key', 'value')
+await r.get('key')
+
+# Go (go-redis)
+rdb := redis.NewClient(&redis.Options{Addr: "localhost:6379"})
+rdb.Set(ctx, "key", "value", 0)
+rdb.Get(ctx, "key")
+```
+
+For VoidCache extended types, issue them as raw commands:
+
+```python
+# Python: use execute_command for VCSET/VCGET
+r.execute_command('VCSET', 'score', 'int', '42')
+r.execute_command('VCGET', 'score')
+```
+
+### Cluster Mode
+
+VoidCache implements the Redis Cluster protocol (16384 hash slots, CRC16
+key routing, `CLUSTER SLOTS` / `CLUSTER NODES` / `CLUSTER MYID`).
+
+Any Redis Cluster-aware driver connects and routes automatically:
+
+```python
+# Python cluster client
+from rediscluster import RedisCluster
+rc = RedisCluster(startup_nodes=[{"host": "10.0.0.1", "port": 6379}])
+rc.set("key", "value")
+```
+
+To run a 3-node cluster on one machine:
+
+```bash
+./vcli server --port 6379 --cluster --announce-addr 127.0.0.1 --announce-port 6379 &
+./vcli server --port 6380 --cluster --announce-addr 127.0.0.1 --announce-port 6380 &
+./vcli server --port 6381 --cluster --announce-addr 127.0.0.1 --announce-port 6381 &
+```
+
+### TLS Setup
+
+Generate a self-signed cert for testing:
+
+```bash
+openssl req -x509 -newkey rsa:4096 -keyout server.key -out server.crt \
+  -days 365 -nodes -subj '/CN=localhost'
+
+./vcli server --port 6380 --tls-cert server.crt --tls-key server.key
+./vcli --tls -p 6380 PING
+```
+
+For production, use a cert from your CA or Let's Encrypt.  
+Alternatively, terminate TLS at a reverse proxy (stunnel, nginx, HAProxy)
+and connect VoidCache on loopback with plain TCP.
+
+### Authentication
+
+VoidCache supports two auth modes:
+
+**1. Simple password** (`--requirepass`) — Redis-compatible `AUTH <password>`:
+```bash
+./vcli server --requirepass mysecret
+./vcli -a mysecret PING
+```
+
+**2. ACL file** (`--acl-file`) — multiple users with per-user permissions:
+```bash
+# Create ACL file
+echo "admin $(echo -n 'adminpass' | sha256sum | cut -d' ' -f1) *"   > vcache.acl
+echo "reader $(echo -n 'readpass' | sha256sum | cut -d' ' -f1) r"  >> vcache.acl
+
+./vcli server --acl-file vcache.acl
+./vcli -u admin -a adminpass SET key val
+./vcli -u reader -a readpass GET key
+./vcli -u reader -a readpass SET key val   # → NOPERM error
+```
+
+ACL permission flags: `r` (read) `w` (write) `a` (admin) `p` (pubsub) `*` (all)
+
+### Architecture
+
+```
+vcli binary
+├── server mode: vcli server [flags]
+│   ├── epoll edge-triggered event loop
+│   ├── SO_REUSEPORT: N worker threads each accept independently
+│   ├── TLS 1.2/1.3 via libssl.so.3 (non-blocking handshake in epoll)
+│   ├── RESP3 parser + writer (proto.c)
+│   ├── Command dispatch (commands.c) → voidcache.c core
+│   ├── HMAC-SHA256 auth + ACL (auth.c, pure-C SHA-256)
+│   └── WAL persistence (voidcache.c)
+│
+└── client mode: vcli [flags] [command]
+    ├── Direct TCP or TLS connection
+    ├── RESP3 type-aware printer (int/float/bool/json/binary)
+    ├── Colorized interactive REPL with readline
+    ├── Pipe mode: read commands from stdin
+    └── Cluster mode: CRC16 routing + MOVED/ASK redirect (cluster.c)
+```
