@@ -1,0 +1,79 @@
+---
+# ConfigMap: VoidCache ACL (user permissions)
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: vcache-config
+  namespace: voidcache
+  labels:
+    app.kubernetes.io/name: voidcache
+    app.kubernetes.io/component: config
+data:
+  vcache.acl: |
+    # Format: <username> <sha256_of_password_hex> <acl_flags>
+    # Flags:  r=read  w=write  a=admin  *=all
+    #
+    # IMPORTANT: Replace hashes with your own values:
+    #   echo -n "yourpassword" | sha256sum | cut -d' ' -f1
+    #
+    # admin  (password: adminpass)
+    admin  11a03d33e61fa9f0a0cdce9ea5e4dc1f5e6a26e2f19a7c34b6a8b5d8e0f3c2a1  *
+    # app   (password: apppass)
+    app    5e884898da28047151d0e56f8dc6292773603d0d6aabbdd62a11ef721d1542d8  rw
+    # reader (password: readpass)
+    reader 89e01536ac207279409d4de1e5253e01ea85473d9e4a92e0e35e0bfb69c20e8d  r
+
+---
+# ConfigMap: HAProxy configuration
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: haproxy-config
+  namespace: voidcache
+  labels:
+    app.kubernetes.io/name: voidcache
+    app.kubernetes.io/component: haproxy
+data:
+  haproxy.cfg: |
+    global
+      maxconn     50000
+      log         stdout format raw local0
+      tune.bufsize 32768
+
+    defaults
+      mode        tcp
+      log         global
+      option      tcplog
+      option      dontlognull
+      option      redispatch
+      retries     3
+      timeout connect 3s
+      timeout client  5m
+      timeout server  5m
+      timeout check   2s
+
+    # Stats UI  →  kubectl port-forward svc/vcache-haproxy 8404:8404
+    frontend stats
+      bind        *:8404
+      mode        http
+      stats enable
+      stats uri   /stats
+      stats realm VoidCache\ HAProxy
+      stats auth  admin:admin
+      stats refresh 5s
+      stats show-legends
+
+    frontend vcache_frontend
+      bind        *:6379
+      default_backend vcache_nodes
+
+    backend vcache_nodes
+      balance     leastconn
+      option      tcp-check
+      tcp-check send  "PING\r\n"
+      tcp-check expect string "+PONG"
+      # StatefulSet pods are addressable by their stable DNS names:
+      #   vcache-{n}.vcache-headless.voidcache.svc.cluster.local
+      server vcache-0 vcache-0.vcache-headless.voidcache.svc.cluster.local:6379 check inter 5s fall 3 rise 2 weight 10
+      server vcache-1 vcache-1.vcache-headless.voidcache.svc.cluster.local:6379 check inter 5s fall 3 rise 2 weight 10
+      server vcache-2 vcache-2.vcache-headless.voidcache.svc.cluster.local:6379 check inter 5s fall 3 rise 2 weight 10

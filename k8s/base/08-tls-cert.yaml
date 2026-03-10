@@ -1,0 +1,99 @@
+---
+# cert-manager self-signed Issuer (for local/dev clusters)
+# Install cert-manager first:
+#   kubectl apply -f https://github.com/cert-manager/cert-manager/releases/latest/download/cert-manager.yaml
+#   kubectl wait --for=condition=Available deployment --all -n cert-manager --timeout=120s
+#
+apiVersion: cert-manager.io/v1
+kind: Issuer
+metadata:
+  name: vcache-selfsigned
+  namespace: voidcache
+spec:
+  selfSigned: {}
+
+---
+# Self-signed CA certificate
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: vcache-ca
+  namespace: voidcache
+spec:
+  isCA: true
+  commonName: vcache-ca
+  secretName: vcache-ca-secret
+  privateKey:
+    algorithm: ECDSA
+    size: 256
+  issuerRef:
+    name: vcache-selfsigned
+    kind: Issuer
+
+---
+# CA-backed Issuer (signs the server cert)
+apiVersion: cert-manager.io/v1
+kind: Issuer
+metadata:
+  name: vcache-ca-issuer
+  namespace: voidcache
+spec:
+  ca:
+    secretName: vcache-ca-secret
+
+---
+# Server certificate — valid for all node DNS names + the Service name
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: vcache-tls
+  namespace: voidcache
+spec:
+  secretName: vcache-tls-secret
+  duration: 8760h       # 1 year
+  renewBefore: 720h     # renew 30 days before expiry (auto-rotated by cert-manager)
+  subject:
+    organizations: [voidcache]
+  commonName: vcache.voidcache.svc.cluster.local
+  isCA: false
+  privateKey:
+    algorithm: RSA
+    encoding: PKCS1
+    size: 2048
+  usages:
+    - server auth
+    - client auth
+  dnsNames:
+    # Service names
+    - vcache
+    - vcache.voidcache
+    - vcache.voidcache.svc
+    - vcache.voidcache.svc.cluster.local
+    # Individual pod names via headless service
+    - vcache-0.vcache-headless.voidcache.svc.cluster.local
+    - vcache-1.vcache-headless.voidcache.svc.cluster.local
+    - vcache-2.vcache-headless.voidcache.svc.cluster.local
+    - localhost
+  ipAddresses:
+    - 127.0.0.1
+  issuerRef:
+    name: vcache-ca-issuer
+    kind: Issuer
+
+# ── To use Let's Encrypt instead (production) ─────────────────────────────────
+# Replace the Issuer above with a ClusterIssuer:
+#
+# apiVersion: cert-manager.io/v1
+# kind: ClusterIssuer
+# metadata:
+#   name: letsencrypt-prod
+# spec:
+#   acme:
+#     server: https://acme-v02.api.letsencrypt.org/directory
+#     email: you@example.com
+#     privateKeySecretRef:
+#       name: letsencrypt-prod
+#     solvers:
+#       - http01:
+#           ingress:
+#             class: nginx

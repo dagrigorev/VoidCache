@@ -1,0 +1,80 @@
+---
+# NetworkPolicy — only allow traffic on the paths that should exist:
+#   client apps → HAProxy :6379
+#   HAProxy → cache nodes :6379
+#   cache nodes → each other :6379 (cluster gossip)
+#   monitoring → cache nodes :6379 (health probes)
+#
+# Everything else is denied by default.
+# Requires a CNI that enforces NetworkPolicy (Calico, Cilium, Weave).
+# NOTE: NetworkPolicy has no effect on clusters that don't enforce it (e.g. flannel).
+
+# Allow ingress to HAProxy from anywhere in the cluster (or from Ingress controller)
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-haproxy-ingress
+  namespace: voidcache
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/component: proxy
+  policyTypes: [Ingress]
+  ingress:
+    - ports:
+        - port: 6379
+        - port: 8404
+
+---
+# Allow HAProxy to reach cache nodes
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-haproxy-to-cache
+  namespace: voidcache
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/component: cache
+  policyTypes: [Ingress]
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/component: proxy
+      ports:
+        - port: 6379
+
+---
+# Allow cache nodes to talk to each other (cluster gossip / CLUSTER NODES)
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-cache-cluster-gossip
+  namespace: voidcache
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/component: cache
+  policyTypes: [Ingress, Egress]
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/component: cache
+      ports:
+        - port: 6379
+  egress:
+    - to:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/component: cache
+      ports:
+        - port: 6379
+    # Allow DNS resolution
+    - to: []
+      ports:
+        - port: 53
+          protocol: UDP
+        - port: 53
+          protocol: TCP

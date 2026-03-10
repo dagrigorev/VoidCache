@@ -1,0 +1,87 @@
+---
+# Headless Service — gives each StatefulSet pod a stable DNS name:
+#   vcache-0.vcache-headless.voidcache.svc.cluster.local
+#   vcache-1.vcache-headless.voidcache.svc.cluster.local
+#   vcache-2.vcache-headless.voidcache.svc.cluster.local
+#
+# Used by: HAProxy backend, cluster ANNOUNCE_ADDR, inter-node gossip
+#
+apiVersion: v1
+kind: Service
+metadata:
+  name: vcache-headless
+  namespace: voidcache
+  labels:
+    app.kubernetes.io/name: voidcache
+    app.kubernetes.io/component: cache
+spec:
+  clusterIP: None          # headless — no virtual IP, pure DNS
+  selector:
+    app.kubernetes.io/name: voidcache
+    app.kubernetes.io/component: cache
+  ports:
+    - name: resp
+      port: 6379
+      targetPort: 6379
+      protocol: TCP
+  publishNotReadyAddresses: false   # only route to Ready pods
+
+---
+# ClusterIP Service for HAProxy — the client-facing endpoint inside the cluster
+apiVersion: v1
+kind: Service
+metadata:
+  name: vcache
+  namespace: voidcache
+  labels:
+    app.kubernetes.io/name: voidcache
+    app.kubernetes.io/component: proxy
+  annotations:
+    # Uncomment for cloud load balancers (AWS NLB, GCP TCP LB, Azure LB)
+    # service.beta.kubernetes.io/aws-load-balancer-type: "nlb"
+    # service.beta.kubernetes.io/aws-load-balancer-scheme: "internet-facing"
+spec:
+  # Change to LoadBalancer to expose outside the cluster
+  # Change to NodePort for bare-metal / minikube
+  type: ClusterIP
+  selector:
+    app.kubernetes.io/name: voidcache
+    app.kubernetes.io/component: proxy
+  ports:
+    - name: resp
+      port: 6379
+      targetPort: 6379
+      protocol: TCP
+    - name: stats
+      port: 8404
+      targetPort: 8404
+      protocol: TCP
+
+---
+# NodePort Service — for local dev / minikube / kind access from the host
+# kubectl port-forward svc/vcache-nodeport 6379:6379 -n voidcache
+apiVersion: v1
+kind: Service
+metadata:
+  name: vcache-nodeport
+  namespace: voidcache
+  labels:
+    app.kubernetes.io/name: voidcache
+    app.kubernetes.io/component: proxy
+    environment: dev
+spec:
+  type: NodePort
+  selector:
+    app.kubernetes.io/name: voidcache
+    app.kubernetes.io/component: proxy
+  ports:
+    - name: resp
+      port: 6379
+      targetPort: 6379
+      nodePort: 30379       # fixed NodePort — change if conflicts
+      protocol: TCP
+    - name: stats
+      port: 8404
+      targetPort: 8404
+      nodePort: 30404
+      protocol: TCP

@@ -1,0 +1,198 @@
+# ─────────────────────────────────────────────────────────────────────────────
+# docker-compose.k8s.yml  —  VoidCache: build + Kubernetes deploy
+#
+# DUAL PURPOSE:
+#   1. Local dev:   docker compose -f docker-compose.k8s.yml up --build
+#   2. K8s deploy:  kompose convert -f docker-compose.k8s.yml -o k8s/base/
+#                   kubectl apply -k k8s/overlays/dev
+#
+# QUICK START (minikube):
+#   minikube start
+#   eval $(minikube docker-env)                  # build directly into minikube
+#   docker compose -f docker-compose.k8s.yml build
+#   kompose convert -f docker-compose.k8s.yml -o k8s/base/
+#   kubectl apply -k k8s/overlays/dev
+#   kubectl port-forward svc/vcache 6379:6379 -n voidcache
+#
+# QUICK START (kind):
+#   kind create cluster --name voidcache
+#   docker compose -f docker-compose.k8s.yml build
+#   kind load docker-image voidcache:latest --name voidcache
+#   kubectl apply -k k8s/overlays/dev
+#
+# QUICK START (EKS/GKE/AKS):
+#   docker compose -f docker-compose.k8s.yml build
+#   docker tag voidcache:latest ghcr.io/YOUR_ORG/voidcache:latest
+#   docker push ghcr.io/YOUR_ORG/voidcache:latest
+#   # edit k8s/overlays/prod/kustomization.yaml → set your registry
+#   kubectl apply -k k8s/overlays/prod
+# ─────────────────────────────────────────────────────────────────────────────
+
+name: voidcache
+
+# ── Reusable node config ──────────────────────────────────────────────────────
+x-vcache-node: &vcache-node
+  image: ${REGISTRY:-voidcache}:${TAG:-latest}
+  build:
+    context: .
+    dockerfile: Dockerfile
+    # kompose uses this name for the k8s image field
+  restart: unless-stopped
+  environment:
+    VC_CLUSTER:    "yes"
+    VC_MAXMEMORY:  ${VC_MAXMEMORY:-512m}
+    VC_THREADS:    ${VC_THREADS:-4}
+    VC_NO_WAL:     ${VC_NO_WAL:-0}
+  env_file:
+    - .env.secret                  # VC_PASSWORD — never commit to git
+  labels:
+    kompose.image-pull-policy:  "IfNotPresent"
+    kompose.controller.type:    "statefulset"
+    kompose.service.type:       "ClusterIP"
+    kompose.volume.size:        "10Gi"
+    app.kubernetes.io/name:     "voidcache"
+    app.kubernetes.io/part-of:  "voidcache-cluster"
+
+services:
+
+  # ── Cache node 0 ────────────────────────────────────────────────────────────
+  vcache-0:
+    <<: *vcache-node
+    hostname: vcache-0
+    environment:
+      VC_CLUSTER:       "yes"
+      VC_MAXMEMORY:     ${VC_MAXMEMORY:-512m}
+      VC_THREADS:       ${VC_THREADS:-4}
+      VC_NO_WAL:        ${VC_NO_WAL:-0}
+      # In k8s, StatefulSet pods get stable DNS:
+      #   <pod>.<headless-svc>.<namespace>.svc.cluster.local
+      VC_ANNOUNCE_ADDR: "vcache-0.vcache-headless.voidcache.svc.cluster.local"
+      VC_ANNOUNCE_PORT: "6379"
+    ports:
+      - target: 6379
+        published: 6381           # host port for local docker-compose access
+    volumes:
+      - vcache-0-data:/vcache/data
+      - type: bind
+        source: ./docker/config/vcache.acl
+        target: /vcache/config/vcache.acl
+        read_only: true
+    healthcheck:
+      test: ["CMD", "vcli", "-h", "127.0.0.1", "-p", "6379", "--no-color", "PING"]
+      interval: 10s
+      timeout:  3s
+      retries:  5
+      start_period: 5s
+    labels:
+      kompose.image-pull-policy: "IfNotPresent"
+      kompose.controller.type:   "statefulset"
+      kompose.service.type:      "ClusterIP"
+      kompose.volume.size:       "10Gi"
+      app.kubernetes.io/name:    "voidcache"
+      app.kubernetes.io/component: "cache"
+
+  # ── Cache node 1 ────────────────────────────────────────────────────────────
+  vcache-1:
+    <<: *vcache-node
+    hostname: vcache-1
+    environment:
+      VC_CLUSTER:       "yes"
+      VC_MAXMEMORY:     ${VC_MAXMEMORY:-512m}
+      VC_THREADS:       ${VC_THREADS:-4}
+      VC_NO_WAL:        ${VC_NO_WAL:-0}
+      VC_ANNOUNCE_ADDR: "vcache-1.vcache-headless.voidcache.svc.cluster.local"
+      VC_ANNOUNCE_PORT: "6379"
+    ports:
+      - target: 6379
+        published: 6382
+    volumes:
+      - vcache-1-data:/vcache/data
+      - type: bind
+        source: ./docker/config/vcache.acl
+        target: /vcache/config/vcache.acl
+        read_only: true
+    healthcheck:
+      test: ["CMD", "vcli", "-h", "127.0.0.1", "-p", "6379", "--no-color", "PING"]
+      interval: 10s
+      timeout:  3s
+      retries:  5
+      start_period: 5s
+    labels:
+      kompose.image-pull-policy: "IfNotPresent"
+      kompose.controller.type:   "statefulset"
+      kompose.service.type:      "ClusterIP"
+      kompose.volume.size:       "10Gi"
+      app.kubernetes.io/name:    "voidcache"
+      app.kubernetes.io/component: "cache"
+
+  # ── Cache node 2 ────────────────────────────────────────────────────────────
+  vcache-2:
+    <<: *vcache-node
+    hostname: vcache-2
+    environment:
+      VC_CLUSTER:       "yes"
+      VC_MAXMEMORY:     ${VC_MAXMEMORY:-512m}
+      VC_THREADS:       ${VC_THREADS:-4}
+      VC_NO_WAL:        ${VC_NO_WAL:-0}
+      VC_ANNOUNCE_ADDR: "vcache-2.vcache-headless.voidcache.svc.cluster.local"
+      VC_ANNOUNCE_PORT: "6379"
+    ports:
+      - target: 6379
+        published: 6383
+    volumes:
+      - vcache-2-data:/vcache/data
+      - type: bind
+        source: ./docker/config/vcache.acl
+        target: /vcache/config/vcache.acl
+        read_only: true
+    healthcheck:
+      test: ["CMD", "vcli", "-h", "127.0.0.1", "-p", "6379", "--no-color", "PING"]
+      interval: 10s
+      timeout:  3s
+      retries:  5
+      start_period: 5s
+    labels:
+      kompose.image-pull-policy: "IfNotPresent"
+      kompose.controller.type:   "statefulset"
+      kompose.service.type:      "ClusterIP"
+      kompose.volume.size:       "10Gi"
+      app.kubernetes.io/name:    "voidcache"
+      app.kubernetes.io/component: "cache"
+
+  # ── HAProxy load balancer ────────────────────────────────────────────────────
+  haproxy:
+    image: haproxy:2.9-alpine
+    restart: unless-stopped
+    depends_on:
+      vcache-0: { condition: service_healthy }
+      vcache-1: { condition: service_healthy }
+      vcache-2: { condition: service_healthy }
+    ports:
+      - target: 6379
+        published: ${VC_PORT:-6379}   # main client endpoint
+      - target: 8404
+        published: 8404               # stats UI
+    volumes:
+      - type: bind
+        source: ./docker/haproxy/haproxy.cfg
+        target: /usr/local/etc/haproxy/haproxy.cfg
+        read_only: true
+    healthcheck:
+      test: ["CMD", "haproxy", "-c", "-f", "/usr/local/etc/haproxy/haproxy.cfg"]
+      interval: 10s
+      timeout: 3s
+      retries: 3
+    labels:
+      # Exposed as LoadBalancer in k8s; kompose creates a Service + optional Ingress
+      kompose.service.type:    "LoadBalancer"
+      kompose.service.expose:  "vcache.example.com"   # replace with your domain or remove
+      kompose.image-pull-policy: "Always"
+      app.kubernetes.io/name:      "voidcache"
+      app.kubernetes.io/component: "proxy"
+
+# ── Volumes ───────────────────────────────────────────────────────────────────
+# In k8s these become PersistentVolumeClaims via volumeClaimTemplates
+volumes:
+  vcache-0-data:
+  vcache-1-data:
+  vcache-2-data:

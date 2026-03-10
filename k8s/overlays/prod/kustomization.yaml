@@ -1,0 +1,101 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+bases:
+  - ../../base
+
+# Point to your actual registry + version tag
+images:
+  - name: ghcr.io/yourorg/voidcache
+    newName: ghcr.io/yourorg/voidcache   # replace yourorg
+    newTag: "2.0.0"                       # pin to an exact release tag
+
+patches:
+  # Production resources and configuration
+  - patch: |-
+      apiVersion: apps/v1
+      kind: StatefulSet
+      metadata:
+        name: vcache
+        namespace: voidcache
+      spec:
+        replicas: 3
+        template:
+          spec:
+            containers:
+              - name: vcache
+                resources:
+                  requests:
+                    cpu: "1000m"
+                    memory: "1Gi"
+                  limits:
+                    cpu: "4000m"
+                    memory: "2Gi"
+                env:
+                  - name: VC_MAXMEMORY
+                    value: "1500m"
+                  - name: VC_THREADS
+                    value: "8"
+
+  # Larger PVCs in production
+  - patch: |-
+      apiVersion: apps/v1
+      kind: StatefulSet
+      metadata:
+        name: vcache
+        namespace: voidcache
+      spec:
+        volumeClaimTemplates:
+          - metadata:
+              name: data
+            spec:
+              accessModes: ["ReadWriteOnce"]
+              storageClassName: "fast-ssd"   # use your cloud provider's SSD class
+              resources:
+                requests:
+                  storage: 50Gi
+
+  # Expose via cloud LoadBalancer
+  - patch: |-
+      apiVersion: v1
+      kind: Service
+      metadata:
+        name: vcache
+        namespace: voidcache
+        annotations:
+          # AWS NLB (uncomment for EKS):
+          # service.beta.kubernetes.io/aws-load-balancer-type: "nlb"
+          # service.beta.kubernetes.io/aws-load-balancer-scheme: "internal"
+          # GCP (uncomment for GKE):
+          # cloud.google.com/load-balancer-type: "Internal"
+      spec:
+        type: LoadBalancer
+
+  # HAProxy: more replicas in prod
+  - patch: |-
+      apiVersion: apps/v1
+      kind: Deployment
+      metadata:
+        name: vcache-haproxy
+        namespace: voidcache
+      spec:
+        replicas: 3
+        template:
+          spec:
+            containers:
+              - name: haproxy
+                resources:
+                  requests:
+                    cpu: "200m"
+                    memory: "128Mi"
+                  limits:
+                    cpu: "1000m"
+                    memory: "512Mi"
+
+# Enable all production features
+patchesStrategicMerge: []
+
+# Uncomment to activate cert-manager TLS + monitoring in prod
+# resources:
+#   - ../../base/08-tls-cert.yaml
+#   - ../../base/09-monitoring.yaml

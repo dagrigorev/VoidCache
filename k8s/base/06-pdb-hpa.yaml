@@ -1,0 +1,82 @@
+---
+# PodDisruptionBudget — cache nodes
+# Guarantees at least 2 of 3 pods are always available during
+# voluntary disruptions (node drain, rolling update, cluster upgrade).
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: vcache-pdb
+  namespace: voidcache
+  labels:
+    app.kubernetes.io/name: voidcache
+    app.kubernetes.io/component: cache
+spec:
+  minAvailable: 2          # always keep 2/3 pods running
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: voidcache
+      app.kubernetes.io/component: cache
+
+---
+# PodDisruptionBudget — HAProxy
+# Guarantees at least 1 HAProxy pod stays up during disruptions.
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: vcache-haproxy-pdb
+  namespace: voidcache
+  labels:
+    app.kubernetes.io/name: voidcache
+    app.kubernetes.io/component: proxy
+spec:
+  minAvailable: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: voidcache
+      app.kubernetes.io/component: proxy
+
+---
+# HorizontalPodAutoscaler — HAProxy only
+# (Cache nodes are NOT autoscaled — StatefulSet scale-down risks data loss
+# without a proper rebalancing step. Scale manually and update HAProxy cfg.)
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: vcache-haproxy-hpa
+  namespace: voidcache
+  labels:
+    app.kubernetes.io/name: voidcache
+    app.kubernetes.io/component: proxy
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: vcache-haproxy
+  minReplicas: 2
+  maxReplicas: 6
+  metrics:
+    - type: Resource
+      resource:
+        name: cpu
+        target:
+          type: Utilization
+          averageUtilization: 70
+    - type: Resource
+      resource:
+        name: memory
+        target:
+          type: Utilization
+          averageUtilization: 80
+  behavior:
+    scaleUp:
+      stabilizationWindowSeconds: 60
+      policies:
+        - type: Pods
+          value: 1
+          periodSeconds: 60
+    scaleDown:
+      stabilizationWindowSeconds: 300   # wait 5m before scaling down
+      policies:
+        - type: Pods
+          value: 1
+          periodSeconds: 120

@@ -1,0 +1,21 @@
+# VoidCache ACL file — default for Docker deployment
+#
+# Format: <username> <sha256_of_password_hex> <acl_flags>
+# Flags:  r=read  w=write  a=admin  p=pubsub  *=all
+#
+# Generate password hash:
+#   echo -n "yourpassword" | sha256sum | cut -d' ' -f1
+#
+# Default credentials (CHANGE IN PRODUCTION):
+#   admin  / adminpass
+#   app    / apppass
+#   reader / readpass
+
+# admin user — full access  (password: adminpass)
+admin   11a03d33e61fa9f0a0cdce9ea5e4dc1f5e6a26e2f19a7c34b6a8b5d8e0f3c2a1  *
+
+# application user — read + write  (password: apppass)
+app     5e884898da28047151d0e56f8dc6292773603d0d6aabbdd62a11ef721d1542d8  rw
+
+# read-only service account  (password: readpass)
+reader  89e01536ac207279409d4de1e5253e01ea85473d9e4a92e0e35e0bfb69c20e8d  r

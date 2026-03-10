@@ -1,0 +1,173 @@
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: {{ include "voidcache.fullname" . }}
+  namespace: {{ include "voidcache.namespace" . }}
+  labels:
+    {{- include "voidcache.labels" . | nindent 4 }}
+    app.kubernetes.io/component: cache
+spec:
+  serviceName: {{ include "voidcache.headlessService" . }}
+  replicas: {{ .Values.cache.replicas }}
+  selector:
+    matchLabels:
+      {{- include "voidcache.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: cache
+  updateStrategy:
+    type: RollingUpdate
+    rollingUpdate:
+      partition: 0
+  persistentVolumeClaimRetentionPolicy:
+    whenDeleted: {{ if .Values.cache.persistence.retainOnDelete }}Retain{{ else }}Delete{{ end }}
+    whenScaled: Retain
+  template:
+    metadata:
+      labels:
+        {{- include "voidcache.selectorLabels" . | nindent 8 }}
+        app.kubernetes.io/component: cache
+      annotations:
+        checksum/config: {{ include (print $.Template.BasePath "/configmap.yaml") . | sha256sum }}
+        checksum/secret: {{ include (print $.Template.BasePath "/secret.yaml") . | sha256sum }}
+    spec:
+      {{- if .Values.image.pullSecrets }}
+      imagePullSecrets:
+        {{- toYaml .Values.image.pullSecrets | nindent 8 }}
+      {{- end }}
+      securityContext:
+        {{- toYaml .Values.securityContext | nindent 8 }}
+      terminationGracePeriodSeconds: 30
+      {{- if .Values.cache.affinity.podAntiAffinity.required }}
+      affinity:
+        podAntiAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+            - labelSelector:
+                matchLabels:
+                  {{- include "voidcache.selectorLabels" . | nindent 18 }}
+                  app.kubernetes.io/component: cache
+              topologyKey: kubernetes.io/hostname
+      {{- else }}
+      affinity:
+        podAntiAffinity:
+          preferredDuringSchedulingIgnoredDuringExecution:
+            - weight: 100
+              podAffinityTerm:
+                labelSelector:
+                  matchLabels:
+                    {{- include "voidcache.selectorLabels" . | nindent 20 }}
+                    app.kubernetes.io/component: cache
+                topologyKey: kubernetes.io/hostname
+      {{- end }}
+      initContainers:
+        - name: init-wait
+          image: busybox:1.36
+          command: ["sh", "-c", "until nslookup {{ include "voidcache.headlessService" . }}.{{ include "voidcache.namespace" . }}.svc.cluster.local; do sleep 1; done"]
+          resources:
+            requests: { cpu: 10m, memory: 16Mi }
+            limits:   { cpu: 100m, memory: 32Mi }
+      containers:
+        - name: vcache
+          image: {{ include "voidcache.image" . }}
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          ports:
+            - name: resp
+              containerPort: 6379
+          env:
+            - name: VC_CLUSTER
+              value: {{ if .Values.cache.clusterEnabled }}"yes"{{ else }}"no"{{ end }}
+            - name: VC_MAXMEMORY
+              value: {{ .Values.cache.maxMemory | quote }}
+            - name: VC_THREADS
+              value: {{ .Values.cache.threads | quote }}
+            - name: VC_NO_WAL
+              value: {{ if .Values.cache.walEnabled }}"0"{{ else }}"1"{{ end }}
+            - name: POD_NAME
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.name
+            - name: POD_NAMESPACE
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.namespace
+            - name: VC_ANNOUNCE_ADDR
+              value: "$(POD_NAME).{{ include "voidcache.headlessService" . }}.$(POD_NAMESPACE).svc.cluster.local"
+            - name: VC_ANNOUNCE_PORT
+              value: "6379"
+            {{- if .Values.auth.enabled }}
+            - name: VC_PASSWORD
+              {{- if .Values.auth.existingSecret }}
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.auth.existingSecret }}
+                  key: {{ .Values.auth.existingSecretKey }}
+              {{- else }}
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "voidcache.fullname" . }}-secret
+                  key: VC_PASSWORD
+              {{- end }}
+            {{- end }}
+          volumeMounts:
+            - name: data
+              mountPath: /vcache/data
+            - name: config
+              mountPath: /vcache/config
+              readOnly: true
+            {{- if .Values.tls.enabled }}
+            - name: tls
+              mountPath: /vcache/tls
+              readOnly: true
+            {{- end }}
+          livenessProbe:
+            exec:
+              command: ["vcli", "-h", "127.0.0.1", "-p", "6379", "--no-color", "PING"]
+            initialDelaySeconds: 10
+            periodSeconds: 15
+            timeoutSeconds: 3
+            failureThreshold: 3
+          readinessProbe:
+            exec:
+              command: ["vcli", "-h", "127.0.0.1", "-p", "6379", "--no-color", "PING"]
+            initialDelaySeconds: 5
+            periodSeconds: 10
+            timeoutSeconds: 2
+            failureThreshold: 3
+          startupProbe:
+            exec:
+              command: ["vcli", "-h", "127.0.0.1", "-p", "6379", "--no-color", "PING"]
+            initialDelaySeconds: 3
+            periodSeconds: 3
+            failureThreshold: 20
+          resources:
+            {{- toYaml .Values.cache.resources | nindent 12 }}
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: false
+            capabilities:
+              drop: ["ALL"]
+      volumes:
+        - name: config
+          configMap:
+            name: {{ include "voidcache.fullname" . }}-config
+        {{- if .Values.tls.enabled }}
+        - name: tls
+          secret:
+            secretName: {{ if .Values.tls.existingSecret }}{{ .Values.tls.existingSecret }}{{ else }}{{ include "voidcache.fullname" . }}-tls{{ end }}
+        {{- end }}
+  {{- if .Values.cache.persistence.enabled }}
+  volumeClaimTemplates:
+    - metadata:
+        name: data
+        labels:
+          {{- include "voidcache.labels" . | nindent 10 }}
+      spec:
+        accessModes: [{{ .Values.cache.persistence.accessMode | quote }}]
+        {{- if .Values.cache.persistence.storageClass }}
+        storageClassName: {{ .Values.cache.persistence.storageClass | quote }}
+        {{- end }}
+        resources:
+          requests:
+            storage: {{ .Values.cache.persistence.size }}
+  {{- else }}
+  # No PVC — use emptyDir (data lost on pod restart)
+  # Set cache.persistence.enabled=true for production
+  {{- end }}

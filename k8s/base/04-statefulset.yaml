@@ -1,0 +1,199 @@
+---
+# StatefulSet — VoidCache cache nodes
+#
+# Why StatefulSet (not Deployment)?
+#   - Pods get stable identities: vcache-0, vcache-1, vcache-2
+#   - Each pod gets its own PersistentVolumeClaim (WAL data survives restarts)
+#   - Stable DNS names via the headless Service:
+#       vcache-{n}.vcache-headless.voidcache.svc.cluster.local
+#   - Ordered rolling updates: vcache-2 → vcache-1 → vcache-0
+#     (highest ordinal first, ensures HAProxy always has a healthy backend)
+#
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: vcache
+  namespace: voidcache
+  labels:
+    app.kubernetes.io/name: voidcache
+    app.kubernetes.io/component: cache
+    app.kubernetes.io/version: "2.0.0"
+spec:
+  serviceName: vcache-headless    # links pods to the headless Service
+  replicas: 3
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: voidcache
+      app.kubernetes.io/component: cache
+  # Ordered rolling update: one pod at a time, highest ordinal first
+  updateStrategy:
+    type: RollingUpdate
+    rollingUpdate:
+      partition: 0              # set to N to canary: only pods ≥N update
+  # Keep PVCs when pods are deleted (data survives scale-down)
+  persistentVolumeClaimRetentionPolicy:
+    whenDeleted: Retain
+    whenScaled: Retain
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: voidcache
+        app.kubernetes.io/component: cache
+        app.kubernetes.io/version: "2.0.0"
+      annotations:
+        # Force pod restart when ConfigMap changes
+        checksum/config: "{{ include (print .Template.BasePath \"/01-configmap.yaml\") . | sha256sum }}"
+    spec:
+      # Never schedule two cache pods on the same node
+      affinity:
+        podAntiAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+            - labelSelector:
+                matchLabels:
+                  app.kubernetes.io/name: voidcache
+                  app.kubernetes.io/component: cache
+              topologyKey: kubernetes.io/hostname
+
+      # Graceful shutdown: let HAProxy drain connections (30s)
+      terminationGracePeriodSeconds: 30
+
+      # Run as non-root (matches the Dockerfile USER vcache)
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 999
+        runAsGroup: 999
+        fsGroup: 999
+
+      # Init container: wait for DNS to be ready before starting
+      initContainers:
+        - name: init-wait
+          image: busybox:1.36
+          command:
+            - sh
+            - -c
+            - |
+              echo "Waiting for DNS..."
+              until nslookup vcache-headless.voidcache.svc.cluster.local; do
+                sleep 1
+              done
+              echo "DNS ready."
+          resources:
+            requests:
+              cpu: 10m
+              memory: 16Mi
+            limits:
+              cpu: 100m
+              memory: 32Mi
+
+      containers:
+        - name: vcache
+          # Replace with your registry after pushing:
+          #   docker build -t ghcr.io/yourorg/voidcache:2.0.0 .
+          #   docker push ghcr.io/yourorg/voidcache:2.0.0
+          image: ghcr.io/yourorg/voidcache:2.0.0
+          imagePullPolicy: IfNotPresent
+
+          ports:
+            - name: resp
+              containerPort: 6379
+              protocol: TCP
+
+          env:
+            - name: VC_CLUSTER
+              value: "yes"
+            - name: VC_PORT
+              value: "6379"
+            - name: VC_MAXMEMORY
+              value: "512m"
+            - name: VC_THREADS
+              value: "4"
+            - name: VC_NO_WAL
+              value: "0"
+            # Stable pod DNS name for cluster announcements
+            # $(POD_NAME) is resolved by the Downward API below
+            - name: POD_NAME
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.name
+            - name: POD_NAMESPACE
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.namespace
+            - name: VC_ANNOUNCE_ADDR
+              value: "$(POD_NAME).vcache-headless.$(POD_NAMESPACE).svc.cluster.local"
+            - name: VC_ANNOUNCE_PORT
+              value: "6379"
+            # Password from Secret (empty = no auth)
+            - name: VC_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: vcache-secret
+                  key: VC_PASSWORD
+                  optional: true
+
+          volumeMounts:
+            - name: data
+              mountPath: /vcache/data
+            - name: config
+              mountPath: /vcache/config
+              readOnly: true
+
+          # Liveness: restart pod if server stops responding
+          livenessProbe:
+            exec:
+              command: ["vcli", "-h", "127.0.0.1", "-p", "6379", "--no-color", "PING"]
+            initialDelaySeconds: 10
+            periodSeconds: 15
+            timeoutSeconds: 3
+            failureThreshold: 3
+
+          # Readiness: remove pod from Service endpoints until it can serve
+          readinessProbe:
+            exec:
+              command: ["vcli", "-h", "127.0.0.1", "-p", "6379", "--no-color", "PING"]
+            initialDelaySeconds: 5
+            periodSeconds: 10
+            timeoutSeconds: 2
+            failureThreshold: 3
+            successThreshold: 1
+
+          # Startup probe: give the pod up to 60s to start before liveness kicks in
+          startupProbe:
+            exec:
+              command: ["vcli", "-h", "127.0.0.1", "-p", "6379", "--no-color", "PING"]
+            initialDelaySeconds: 3
+            periodSeconds: 3
+            timeoutSeconds: 2
+            failureThreshold: 20    # 20 × 3s = 60s max startup time
+
+          resources:
+            requests:
+              cpu: "500m"
+              memory: "600Mi"
+            limits:
+              cpu: "2000m"
+              memory: "1Gi"          # headroom above VC_MAXMEMORY=512m
+
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: false    # WAL writes to /vcache/data
+            capabilities:
+              drop: ["ALL"]
+
+      volumes:
+        - name: config
+          configMap:
+            name: vcache-config
+
+  # PVC template — one per pod, survives pod restarts and rescheduling
+  volumeClaimTemplates:
+    - metadata:
+        name: data
+        labels:
+          app.kubernetes.io/name: voidcache
+      spec:
+        accessModes: ["ReadWriteOnce"]
+        # storageClassName: "fast-ssd"   # uncomment and set for production
+        resources:
+          requests:
+            storage: 10Gi

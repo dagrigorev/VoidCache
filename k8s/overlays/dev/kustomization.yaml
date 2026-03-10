@@ -1,0 +1,116 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+# Inherits everything from base and patches for local dev
+bases:
+  - ../../base
+
+namePrefix: ""
+nameSuffix: ""
+
+# Dev-specific image — built locally and loaded into minikube/kind
+images:
+  - name: ghcr.io/yourorg/voidcache
+    newName: voidcache           # local image name after docker build
+    newTag: latest
+
+patches:
+  # Reduce replicas and resources for local dev
+  - patch: |-
+      apiVersion: apps/v1
+      kind: StatefulSet
+      metadata:
+        name: vcache
+        namespace: voidcache
+      spec:
+        replicas: 1              # single node in dev is enough
+        template:
+          spec:
+            initContainers:
+              - name: init-wait
+                command: ["sh", "-c", "echo skipping DNS wait in dev; sleep 1"]
+            containers:
+              - name: vcache
+                resources:
+                  requests:
+                    cpu: "100m"
+                    memory: "128Mi"
+                  limits:
+                    cpu: "500m"
+                    memory: "256Mi"
+                env:
+                  - name: VC_MAXMEMORY
+                    value: "64m"
+                  - name: VC_THREADS
+                    value: "2"
+                  - name: VC_NO_WAL
+                    value: "1"     # no persistence in dev
+                  - name: VC_CLUSTER
+                    value: "no"    # single node, no cluster protocol
+
+  # HAProxy: 1 replica in dev
+  - patch: |-
+      apiVersion: apps/v1
+      kind: Deployment
+      metadata:
+        name: vcache-haproxy
+        namespace: voidcache
+      spec:
+        replicas: 1
+        template:
+          spec:
+            containers:
+              - name: haproxy
+                resources:
+                  requests:
+                    cpu: "50m"
+                    memory: "32Mi"
+                  limits:
+                    cpu: "200m"
+                    memory: "64Mi"
+
+  # Expose via NodePort for easy host access
+  - patch: |-
+      apiVersion: v1
+      kind: Service
+      metadata:
+        name: vcache
+        namespace: voidcache
+      spec:
+        type: NodePort
+        ports:
+          - name: resp
+            port: 6379
+            targetPort: 6379
+            nodePort: 30379
+          - name: stats
+            port: 8404
+            targetPort: 8404
+            nodePort: 30404
+
+  # Relax PDB in dev (only 1 replica)
+  - patch: |-
+      apiVersion: policy/v1
+      kind: PodDisruptionBudget
+      metadata:
+        name: vcache-pdb
+        namespace: voidcache
+      spec:
+        minAvailable: 0
+
+  # Disable PVC storage (use emptyDir equivalent — smaller request)
+  - patch: |-
+      apiVersion: apps/v1
+      kind: StatefulSet
+      metadata:
+        name: vcache
+        namespace: voidcache
+      spec:
+        volumeClaimTemplates:
+          - metadata:
+              name: data
+            spec:
+              accessModes: ["ReadWriteOnce"]
+              resources:
+                requests:
+                  storage: 1Gi    # tiny in dev

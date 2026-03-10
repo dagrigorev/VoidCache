@@ -1,0 +1,37 @@
+# docker-compose.tls.yml  –  TLS overlay for the VoidCache cluster
+#
+# Usage:
+#   # 1. Generate certs first
+#   docker compose --profile tls up cert-gen
+#
+#   # 2. Start cluster with TLS
+#   docker compose -f docker-compose.yml -f docker-compose.tls.yml up -d
+#
+# ─────────────────────────────────────────────────────────────────────────────
+
+services:
+  vcache-1:
+    environment:
+      VC_TLS_CERT: /vcache/tls/server.crt
+      VC_TLS_KEY:  /vcache/tls/server.key
+    volumes:
+      - ../docker/tls:/vcache/tls:ro
+
+  vcache-2:
+    environment:
+      VC_TLS_CERT: /vcache/tls/server.crt
+      VC_TLS_KEY:  /vcache/tls/server.key
+    volumes:
+      - ../docker/tls:/vcache/tls:ro
+
+  vcache-3:
+    environment:
+      VC_TLS_CERT: /vcache/tls/server.crt
+      VC_TLS_KEY:  /vcache/tls/server.key
+    volumes:
+      - ../docker/tls:/vcache/tls:ro
+
+  haproxy:
+    volumes:
+      - ../docker/haproxy/haproxy-tls.cfg:/usr/local/etc/haproxy/haproxy.cfg:ro
+      - ../docker/tls:/tls:ro
