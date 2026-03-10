@@ -1,13 +1,52 @@
-CMakeLists.txt.user
+# Build outputs
+voidcache_test
+voidcache_bench
+voidcache_main
+*.o
+*.a
+*.so
+*.dylib
+
+# CMake
+build/
+cmake-build-*/
 CMakeCache.txt
-CMakeFiles
-CMakeScripts
-Testing
-Makefile
+CMakeFiles/
 cmake_install.cmake
-install_manifest.txt
-compile_commands.json
 CTestTestfile.cmake
-_deps
-CMakeUserPresets.json
-build
+Makefile.cmake
+install_manifest.txt
+_deps/
+
+# WAL / persistence files
+*.wal
+*.wal.*
+*.snap
+
+# Editor / IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+Thumbs.db
+
+# Sanitizer / profiling artifacts
+*.gcda
+*.gcno
+*.gcov
+callgrind.out.*
+massif.out.*
+perf.data
+perf.data.old
+
+# Crash dumps
+core
+core.*
+vgcore.*
+
+# Temp / debug binaries
+/tmp/
+dbg*
+diag*

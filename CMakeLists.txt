@@ -1,28 +1,32 @@
 cmake_minimum_required(VERSION 3.20)
-project(VoidCache LANGUAGES CXX)
+project(VoidCache LANGUAGES C)
 
-set(CMAKE_CXX_STANDARD 20)
-set(CMAKE_CXX_STANDARD_REQUIRED ON)
+set(CMAKE_C_STANDARD 11)
+set(CMAKE_C_STANDARD_REQUIRED ON)
 
-# Оптимизация под производительность
-#add_compile_options(-O3 -march=native)
+# ── Performance flags ──────────────────────────────────────
+add_compile_options(
+    -O3
+    -march=native
+    -funroll-loops
+    -fno-omit-frame-pointer
+    -Wall -Wextra
+)
 
-# Включение тестов
-enable_testing()
-find_package(GTest REQUIRED)
-
+# ── Shared library ─────────────────────────────────────────
 include_directories(include)
 
-# Исходные файлы
-file(GLOB SOURCES "src/*.cpp")
+add_library(voidcache STATIC src/voidcache.c)
+target_include_directories(voidcache PUBLIC include)
+target_link_libraries(voidcache pthread m)
 
-# Сборка исполняемого файла
-add_executable(void ${SOURCES})
-# Сборка тестов
-add_executable(memory_pool_test tests/MemoryPoolTests.cpp src/MemoryPool.cpp)
+# ── Tests ─────────────────────────────────────────────────
+enable_testing()
+add_executable(voidcache_test tests/test_voidcache.c)
+target_link_libraries(voidcache_test voidcache)
+add_test(NAME VoidCacheTests COMMAND voidcache_test)
+set_tests_properties(VoidCacheTests PROPERTIES TIMEOUT 30)
 
-# Подключение заголовков
-target_include_directories(void PUBLIC include)
-target_link_libraries(memory_pool_test GTest::GTest GTest::Main)
-
-add_test(NAME MemoryPoolTest COMMAND memory_pool_test)
+# ── Benchmark ─────────────────────────────────────────────
+add_executable(voidcache_bench bench/benchmark.c)
+target_link_libraries(voidcache_bench voidcache m)
