@@ -1,0 +1,336 @@
+/*
+ * tests/test_voidcache.c  –  VoidCache unit & stress tests
+ */
+#define _POSIX_C_SOURCE 200809L
+#include "voidcache.h"
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <pthread.h>
+#include <unistd.h>
+#include <assert.h>
+#include <stdint.h>
+
+/* ── micro harness ───────────────────────────────────────── */
+static int g_pass = 0, g_fail = 0;
+#define SUITE(n)   printf("\n[%s]\n", n)
+#define OK(c,m)    do { if(c){printf("  PASS  %s\n",m);g_pass++;} \
+                       else{printf("  FAIL  %s  (%s:%d)\n",m,__FILE__,__LINE__);g_fail++;} } while(0)
+#define EQ(a,b,m)  OK((size_t)(a)==(size_t)(b),m)
+#define NEQ(a,b,m) OK((size_t)(a)!=(size_t)(b),m)
+#define STR(a,b,m) OK(strcmp((a),(b))==0,m)
+
+/* ── helpers ─────────────────────────────────────────────── */
+static vc_cache_t *make_cache(void) {
+    return vc_create(512ULL*1024*1024, NULL, 8192);
+}
+
+/* ══════════════════════════════════════════════════════════
+ * 1. Basic SET / GET / DEL
+ * ══════════════════════════════════════════════════════════ */
+static void test_basic(void) {
+    SUITE("Basic SET/GET/DEL");
+    vc_cache_t *c = make_cache();
+
+    /* inline value */
+    vc_err_t e = vc_set(c, "hello", 5, "world", 5, 0);
+    EQ(e, VC_OK, "set returns OK");
+
+    const void *v = NULL; size_t vl = 0;
+    e = vc_get(c, "hello", 5, &v, &vl);
+    EQ(e, VC_OK, "get returns OK");
+    OK(v != NULL, "get value not NULL");
+    OK(memcmp(v, "world", 5) == 0, "get value correct");
+
+    /* missing key */
+    e = vc_get(c, "nope", 4, &v, &vl);
+    EQ(e, VC_ERR_NOTFND, "missing key returns NOTFND");
+
+    /* delete */
+    e = vc_del(c, "hello", 5);
+    EQ(e, VC_OK, "del returns OK");
+    e = vc_get(c, "hello", 5, &v, &vl);
+    EQ(e, VC_ERR_NOTFND, "get after del returns NOTFND");
+
+    /* double delete */
+    e = vc_del(c, "hello", 5);
+    EQ(e, VC_ERR_NOTFND, "double del returns NOTFND");
+
+    vc_destroy(c);
+}
+
+/* ══════════════════════════════════════════════════════════
+ * 2. Overwrite
+ * ══════════════════════════════════════════════════════════ */
+static void test_overwrite(void) {
+    SUITE("Overwrite");
+    vc_cache_t *c = make_cache();
+
+    vc_set(c, "k", 1, "v1", 2, 0);
+    vc_set(c, "k", 1, "v2", 2, 0);
+
+    const void *v; size_t vl;
+    vc_get(c, "k", 1, &v, &vl);
+    OK(memcmp(v, "v2", 2) == 0, "overwrite stores new value");
+
+    vc_destroy(c);
+}
+
+/* ══════════════════════════════════════════════════════════
+ * 3. TTL expiry
+ * ══════════════════════════════════════════════════════════ */
+static void test_ttl(void) {
+    SUITE("TTL expiry");
+    vc_cache_t *c = make_cache();
+
+    vc_set(c, "ttl", 3, "data", 4, 1);   /* 1-second TTL */
+    const void *v; size_t vl;
+    OK(vc_get(c, "ttl", 3, &v, &vl) == VC_OK, "key present before expiry");
+    sleep(2);
+    OK(vc_get(c, "ttl", 3, &v, &vl) != VC_OK, "key gone after expiry");
+
+    vc_destroy(c);
+}
+
+/* ══════════════════════════════════════════════════════════
+ * 4. Many keys – all shards exercised
+ * ══════════════════════════════════════════════════════════ */
+static void test_many_keys(void) {
+    SUITE("Many keys (10000)");
+    vc_cache_t *c = make_cache();
+
+    char key[32], val[64];
+    int N = 10000;
+    for (int i = 0; i < N; i++) {
+        snprintf(key, sizeof(key), "key%07d", i);
+        snprintf(val, sizeof(val), "val%07d", i);
+        vc_set(c, key, strlen(key), val, strlen(val)+1, 0);
+    }
+    int found = 0;
+    for (int i = 0; i < N; i++) {
+        snprintf(key, sizeof(key), "key%07d", i);
+        snprintf(val, sizeof(val), "val%07d", i);
+        const void *v; size_t vl;
+        if (vc_get(c, key, strlen(key), &v, &vl) == VC_OK) {
+            if (memcmp(v, val, strlen(val)+1) == 0) found++;
+        }
+    }
+    EQ(found, N, "all 10000 keys retrieved with correct values");
+
+    vc_destroy(c);
+}
+
+/* ══════════════════════════════════════════════════════════
+ * 5. Inline vs slab vs mmap paths
+ * ══════════════════════════════════════════════════════════ */
+static void test_value_paths(void) {
+    SUITE("Value storage paths");
+    vc_cache_t *c = make_cache();
+    const void *v; size_t vl;
+
+    /* inline: key+val ≤ 32 bytes */
+    char small_val[20]; memset(small_val, 0xAA, sizeof(small_val));
+    vc_set(c, "tiny", 4, small_val, sizeof(small_val), 0);
+    OK(vc_get(c, "tiny", 4, &v, &vl) == VC_OK, "inline path: get OK");
+    OK(memcmp(v, small_val, sizeof(small_val)) == 0, "inline path: value correct");
+
+    /* slab: 256-byte value */
+    char med_val[256]; memset(med_val, 0xBB, sizeof(med_val));
+    vc_set(c, "medium", 6, med_val, sizeof(med_val), 0);
+    OK(vc_get(c, "medium", 6, &v, &vl) == VC_OK, "slab path: get OK");
+    OK(memcmp(v, med_val, sizeof(med_val)) == 0, "slab path: value correct");
+
+    /* slab: 4096-byte value */
+    char *big_val = malloc(4096); memset(big_val, 0xCC, 4096);
+    vc_set(c, "large", 5, big_val, 4096, 0);
+    OK(vc_get(c, "large", 5, &v, &vl) == VC_OK, "slab4k path: get OK");
+    OK(memcmp(v, big_val, 4096) == 0, "slab4k path: value correct");
+    free(big_val);
+
+    vc_destroy(c);
+}
+
+/* ══════════════════════════════════════════════════════════
+ * 6. Flush
+ * ══════════════════════════════════════════════════════════ */
+static void test_flush(void) {
+    SUITE("Flush");
+    vc_cache_t *c = make_cache();
+
+    for (int i = 0; i < 100; i++) {
+        char k[16]; snprintf(k, sizeof(k), "fk%d", i);
+        vc_set(c, k, strlen(k), "v", 1, 0);
+    }
+    vc_flush(c);
+    const void *v; size_t vl;
+    OK(vc_get(c, "fk0", 3, &v, &vl) != VC_OK, "all keys gone after flush");
+
+    vc_global_stats_t s;
+    vc_stats(c, &s);
+    EQ(s.total_keys, 0, "stats show 0 keys after flush");
+
+    vc_destroy(c);
+}
+
+/* ══════════════════════════════════════════════════════════
+ * 7. Concurrent readers + single writer (seqlock validation)
+ * ══════════════════════════════════════════════════════════ */
+typedef struct {
+    vc_cache_t *cache;
+    int         role;   /* 0=writer, 1=reader */
+    int         iters;
+    int         errors;
+} rw_arg_t;
+
+static void *rw_worker(void *arg) {
+    rw_arg_t *a = (rw_arg_t *)arg;
+    const char *key = "shared_key";
+    const char *val = "shared_val_abcdefghij"; /* 21 bytes */
+    for (int i = 0; i < a->iters; i++) {
+        if (a->role == 0) {
+            vc_set(a->cache, key, 10, val, 21, 0);
+        } else {
+            const void *v = NULL; size_t vl = 0;
+            vc_err_t e = vc_get(a->cache, key, 10, &v, &vl);
+            if (e == VC_OK) {
+                char snap[21]; memcpy(snap, v, 21);
+                if (memcmp(snap, val, 21) != 0) a->errors++;
+            }
+        }
+    }
+    return NULL;
+}
+
+static void test_concurrent_rw(void) {
+    SUITE("Concurrent readers + writer (seqlock)");
+    vc_cache_t *c = make_cache();
+
+    /* seed the key first */
+    const char *key = "shared_key";
+    const char *val = "shared_val_abcdefghij";
+    vc_set(c, key, 10, val, 21, 0);
+
+    const int NT = 6, ITER = 200000;
+    pthread_t threads[6];
+    rw_arg_t  args[6];
+
+    for (int i = 0; i < NT; i++) {
+        args[i].cache  = c;
+        args[i].role   = (i == 0) ? 0 : 1;  /* 1 writer, 5 readers */
+        args[i].iters  = ITER;
+        args[i].errors = 0;
+        pthread_create(&threads[i], NULL, rw_worker, &args[i]);
+    }
+    for (int i = 0; i < NT; i++) pthread_join(threads[i], NULL);
+
+    int total_err = 0;
+    for (int i = 0; i < NT; i++) total_err += args[i].errors;
+    EQ(total_err, 0, "no data corruption under concurrent read+write");
+
+    vc_destroy(c);
+}
+
+/* ══════════════════════════════════════════════════════════
+ * 8. Concurrent multi-writer stress
+ * ══════════════════════════════════════════════════════════ */
+typedef struct {
+    vc_cache_t *cache;
+    int         tid;
+    int         iters;
+    int         errors;
+} mw_arg_t;
+
+static void *mw_worker(void *arg) {
+    mw_arg_t *a = (mw_arg_t *)arg;
+    char key[32], val[32];
+    for (int i = 0; i < a->iters; i++) {
+        snprintf(key, sizeof(key), "mwk%d_%06d", a->tid, i);
+        snprintf(val, sizeof(val), "mwv%d_%06d", a->tid, i);
+        if (vc_set(a->cache, key, strlen(key), val, strlen(val)+1, 0) != VC_OK)
+            a->errors++;
+    }
+    return NULL;
+}
+
+static void test_concurrent_write(void) {
+    SUITE("Concurrent multi-writer stress");
+    vc_cache_t *c = make_cache();
+
+    const int NT = 8, ITER = 5000;
+    pthread_t threads[8]; mw_arg_t args[8];
+    for (int i = 0; i < NT; i++) {
+        args[i].cache = c; args[i].tid = i;
+        args[i].iters = ITER; args[i].errors = 0;
+        pthread_create(&threads[i], NULL, mw_worker, &args[i]);
+    }
+    for (int i = 0; i < NT; i++) pthread_join(threads[i], NULL);
+
+    int total_err = 0;
+    for (int i = 0; i < NT; i++) total_err += args[i].errors;
+    EQ(total_err, 0, "no errors under 8-writer concurrent stress");
+
+    /* verify a sample of written keys */
+    int found = 0;
+    char key[32], val[32];
+    for (int t = 0; t < NT; t++) {
+        snprintf(key, sizeof(key), "mwk%d_%06d", t, ITER-1);
+        snprintf(val, sizeof(val), "mwv%d_%06d", t, ITER-1);
+        const void *v; size_t vl;
+        if (vc_get(c, key, strlen(key), &v, &vl) == VC_OK) {
+            char snap[64];
+            size_t cpy = strlen(val)+1; if(cpy>64)cpy=64;
+            memcpy(snap, v, cpy);
+            if (memcmp(snap, val, cpy) == 0) found++;
+        }
+    }
+    EQ(found, NT, "all sampled keys have correct values after concurrent writes");
+
+    vc_destroy(c);
+}
+
+/* ══════════════════════════════════════════════════════════
+ * 9. CLOCK eviction under pressure
+ * ══════════════════════════════════════════════════════════ */
+static void test_eviction(void) {
+    SUITE("CLOCK eviction under pressure");
+    /* Tiny shard table (128 slots / 64 shards = 2 slots per shard avg) */
+    vc_cache_t *c = vc_create(64*1024*1024, NULL, 128);
+
+    /* Insert far more keys than slots to force eviction */
+    char key[32]; int inserted = 0;
+    for (int i = 0; i < 20000; i++) {
+        snprintf(key, sizeof(key), "evk%06d", i);
+        if (vc_set(c, key, strlen(key), "v", 1, 0) == VC_OK) inserted++;
+    }
+    OK(inserted > 0, "at least some keys inserted under eviction pressure");
+
+    vc_global_stats_t s;
+    vc_stats(c, &s);
+    OK(s.evictions > 0, "evictions counter > 0");
+
+    vc_destroy(c);
+}
+
+/* ══════════════════════════════════════════════════════════
+ * main
+ * ══════════════════════════════════════════════════════════ */
+int main(void) {
+    printf("╔══════════════════════════════════════╗\n");
+    printf("║     VoidCache Unit + Stress Tests    ║\n");
+    printf("╚══════════════════════════════════════╝\n");
+
+    test_basic();
+    test_overwrite();
+    test_ttl();
+    test_many_keys();
+    test_value_paths();
+    test_flush();
+    test_concurrent_rw();
+    test_concurrent_write();
+    test_eviction();
+
+    printf("\n══════════════════════════════════════════\n");
+    printf("  Results: %d passed, %d failed\n", g_pass, g_fail);
+    printf("══════════════════════════════════════════\n");
+    return g_fail ? 1 : 0;
+}
