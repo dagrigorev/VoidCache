@@ -140,13 +140,13 @@ services:
       - ./haproxy/haproxy.cfg:/usr/local/etc/haproxy/haproxy.cfg:ro
     networks:
       - vcache-net
+    # HAProxy starts after the cache containers are created (not necessarily healthy).
+    # init-addr none in haproxy.cfg means it resolves backends via Docker DNS at
+    # runtime, so it won't crash if a node isn't ready when HAProxy first boots.
     depends_on:
-      vcache-1:
-        condition: service_healthy
-      vcache-2:
-        condition: service_healthy
-      vcache-3:
-        condition: service_healthy
+      - vcache-1
+      - vcache-2
+      - vcache-3
     healthcheck:
       test: ["CMD", "haproxy", "-c", "-f", "/usr/local/etc/haproxy/haproxy.cfg"]
       interval: 10s

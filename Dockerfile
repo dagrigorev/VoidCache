@@ -12,6 +12,7 @@ FROM ubuntu:24.04 AS builder
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
         gcc make ca-certificates \
+        libc6-dev libssl-dev \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /src
