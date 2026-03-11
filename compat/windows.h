@@ -31,6 +31,12 @@
   #define SO_REUSEPORT SO_REUSEADDR
 #endif
 
+/* MSG_NOSIGNAL: suppress SIGPIPE on broken connections.
+ * Windows has no SIGPIPE, so this flag is a no-op there. */
+#ifndef MSG_NOSIGNAL
+# define MSG_NOSIGNAL 0
+#endif
+
 /* ── sigwait / pthread_sigmask replacement ─────────────────────────────────
  * vcserver_run() blocks on sigwait() waiting for SIGINT/SIGTERM.
  * On Windows, we replace this with a Console Ctrl Handler + Event.

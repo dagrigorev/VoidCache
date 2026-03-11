@@ -148,6 +148,10 @@ static inline int clock_gettime(int clk, struct timespec *ts) {
 # define SO_REUSEPORT SO_REUSEADDR
 #endif
 
+#ifndef MSG_NOSIGNAL
+# define MSG_NOSIGNAL 0
+#endif
+
 /* ── Signal/shutdown (Ctrl+C via SetConsoleCtrlHandler) ─────────────────── */
 #define SIGTERM 15
 #define SIGINT  2

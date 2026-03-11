@@ -562,6 +562,12 @@ static size_t parse_mem(const char *s) {
 
 int main(int argc, char **argv) {
     if (!isatty(STDOUT_FILENO)) use_color = false;
+
+#ifdef _WIN32
+    /* Winsock must be initialised before any socket operations on Windows. */
+    { WSADATA _wsa; WSAStartup(MAKEWORD(2,2), &_wsa); }
+#endif
+
     signal(SIGPIPE, SIG_IGN);
 
     /* Defaults */

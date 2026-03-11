@@ -125,14 +125,25 @@ int vc_hmac_sha256(const uint8_t *key, size_t klen,
 int vc_auth_gen_token(char out_hex[65]) {
     uint8_t raw[VC_AUTH_TOKEN_BYTES];
 
-    /* Try libcrypto RAND_bytes first, fall back to /dev/urandom */
-    if (RAND_bytes(raw, VC_AUTH_TOKEN_BYTES) <= 0) {
+    /* Try OpenSSL RAND_bytes first (works on all platforms). */
+    if (RAND_bytes(raw, VC_AUTH_TOKEN_BYTES) > 0) {
+        /* success — fall through to hex encoding */
+    }
+#ifdef _WIN32
+    /* Windows fallback: BCryptGenRandom (no /dev/urandom on Windows). */
+    else if (vcache_random_bytes(raw, VC_AUTH_TOKEN_BYTES) != 0) {
+        return -1;
+    }
+#else
+    /* POSIX fallback: /dev/urandom */
+    else {
         int fd = open("/dev/urandom", O_RDONLY);
         if (fd < 0) return -1;
         ssize_t n = read(fd, raw, VC_AUTH_TOKEN_BYTES);
         close(fd);
-        if (n != VC_AUTH_TOKEN_BYTES) return -1;
+        if (n != (ssize_t)VC_AUTH_TOKEN_BYTES) return -1;
     }
+#endif
 
     static const char hex[] = "0123456789abcdef";
     for (int i = 0; i < VC_AUTH_TOKEN_BYTES; i++) {
@@ -171,11 +182,24 @@ static uint32_t parse_acl_flags(const char *flags) {
 
 int vc_auth_load(vc_auth_db_t *db, const char *path) {
     memset(db, 0, sizeof(*db));
-    FILE *f = fopen(path, "r");
-    if (!f) {
-        /* No ACL file → no auth required (single-node dev mode) */
+
+    /* No path at all → run without authentication (dev/single-node mode) */
+    if (!path || !*path) {
         db->require_auth = false;
         return 0;
+    }
+
+    FILE *f = fopen(path, "r");
+    if (!f) {
+        /*
+         * A path was explicitly given but the file does not exist.
+         * Rather than silently disabling auth (which would open the server
+         * to unauthenticated access contrary to the operator's intent),
+         * we treat this as a fatal configuration error and return -1.
+         * vcserver_create() will propagate the error and refuse to start.
+         */
+        fprintf(stderr, "[auth] ACL file not found: %s\n", path);
+        return -1;
     }
     db->require_auth = true;
     char line[256];
