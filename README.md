@@ -476,3 +476,11 @@ vcli binary
     ├── Pipe mode: read commands from stdin
     └── Cluster mode: CRC16 routing + MOVED/ASK redirect (cluster.c)
 ```
+
+### How to run
+
+Single instance might be started using Docker:
+
+```bash
+docker run --rm -p 6379:6379 voidcache
+```
