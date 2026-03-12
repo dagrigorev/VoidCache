@@ -17,7 +17,11 @@
 #include "auth.h"
 #include "vc_ssl_abi.h"
 
-#ifdef _WIN32
+#ifdef _MSC_VER
+# include "../compat/msvc.h"
+# include "../compat/pthread_win32.h"
+# include "../compat/wepoll.h"
+#elif defined(_WIN32)
 # include "../compat/windows.h"
 # include "../compat/wepoll.h"
 #else
@@ -291,9 +295,16 @@ static void *worker_thread(void *arg) {
                 while (1) {
                     struct sockaddr_storage sa;
                     socklen_t salen = sizeof(sa);
+#ifdef _WIN32
+                    int cfd = accept(lfd, (struct sockaddr *)&sa, &salen);
+                    if (cfd < 0) break;
+                    /* Set non-blocking on Windows via ioctlsocket */
+                    { u_long _nb = 1; ioctlsocket((SOCKET)cfd, FIONBIO, &_nb); }
+#else
                     int cfd = accept4(lfd, (struct sockaddr *)&sa, &salen,
                                       SOCK_NONBLOCK | SOCK_CLOEXEC);
                     if (cfd < 0) break;
+#endif
 
                     set_tcp_nodelay(cfd);
 
@@ -438,8 +449,13 @@ vcserver_t *vcserver_create(const vc_server_cfg_t *cfg) {
         vcserver_destroy(srv); return NULL;
     }
 
+#ifdef _WIN32
+    int lfd = socket(res->ai_family, SOCK_STREAM, IPPROTO_TCP);
+    { u_long _nb = 1; ioctlsocket((SOCKET)lfd, FIONBIO, &_nb); }
+#else
     int lfd = socket(res->ai_family, SOCK_STREAM | SOCK_NONBLOCK | SOCK_CLOEXEC,
                      IPPROTO_TCP);
+#endif
     if (lfd < 0) { freeaddrinfo(res); vcserver_destroy(srv); return NULL; }
 
     set_reuseaddr(lfd);
@@ -493,9 +509,14 @@ int vcserver_start(vcserver_t *srv) {
         char portstr[8]; snprintf(portstr, sizeof(portstr), "%u", port);
         getaddrinfo(addr, portstr, &hints, &res);
 
+#ifdef _WIN32
+        int wlfd = socket(res->ai_family, SOCK_STREAM, IPPROTO_TCP);
+        { u_long _nb2 = 1; ioctlsocket((SOCKET)wlfd, FIONBIO, &_nb2); }
+#else
         int wlfd = socket(res->ai_family,
                           SOCK_STREAM | SOCK_NONBLOCK | SOCK_CLOEXEC,
                           IPPROTO_TCP);
+#endif
         set_reuseaddr(wlfd);
         set_reuseport(wlfd);
         bind(wlfd, res->ai_addr, res->ai_addrlen);

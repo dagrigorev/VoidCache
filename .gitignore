@@ -52,3 +52,14 @@ dbg*
 diag*
 
 .env.secret
+
+vs2022/.vs
+vs2022/Release/
+vs2022/Debug/
+vs2022/x64/Release/
+vs2022/x64/Debug/
+vs2022/x86/Release/
+vs2022/x86/Debug/
+
+*.vcxproj.user
+*.sln.docstates

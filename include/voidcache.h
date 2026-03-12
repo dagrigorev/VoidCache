@@ -53,7 +53,17 @@
  */
 
 #pragma once
-#define _POSIX_C_SOURCE 200809L
+/* ── MSVC compatibility ─────────────────────────────────────── */
+#ifdef _MSC_VER
+# include "../compat/msvc.h"
+# include "../compat/pthread_win32.h"
+# include "../compat/mman.h"
+# include "../compat/wepoll.h"
+#endif
+/* ─────────────────────────────────────────────────────────────── */
+#if !defined(_WIN32) && !defined(_POSIX_C_SOURCE)
+# define _POSIX_C_SOURCE 200809L
+#endif
 
 #include <stddef.h>
 #include <stdint.h>
@@ -99,7 +109,11 @@ typedef struct {
     size_t arena_size;
     _Atomic size_t alloc_count;
     _Atomic size_t free_count;
+#ifdef _MSC_VER
+} vc_slab_class_t;
+#else
 } __attribute__((aligned(VC_CACHE_LINE))) vc_slab_class_t;
+#endif
 
 /* One allocator shared by all shards (slabs are themselves sharded
  * by size class, so contention is naturally spread). */
@@ -148,7 +162,12 @@ typedef struct {
     uint8_t          probe_dist;  /* 25 */
     uint8_t          _pad[6];     /* 26 */
     uint8_t          payload[32]; /* 32 – inline key+val OR pointers  */
+#ifdef _MSC_VER
+#pragma pack(pop)
+} vc_entry_t;
+#else
 } __attribute__((packed, aligned(VC_CACHE_LINE))) vc_entry_t;
+#endif
 
 _Static_assert(sizeof(vc_entry_t) == 64, "entry must be 64 bytes");
 
@@ -183,7 +202,11 @@ typedef struct {
 
     /* pad to avoid false sharing between shards */
     char _pad[VC_CACHE_LINE];
+#ifdef _MSC_VER
+} vc_shard_t;
+#else
 } __attribute__((aligned(VC_CACHE_LINE))) vc_shard_t;
+#endif
 
 /* ══════════════════════════════════════════════════════════════
  * WAL RECORD
@@ -195,6 +218,9 @@ typedef struct {
 #define VC_WAL_DEL  0x44u  /* 'D' */
 #define VC_WAL_CKP  0x43u  /* 'C' checkpoint marker */
 
+#ifdef _MSC_VER
+#pragma pack(push, 1)
+#endif
 typedef struct {
     uint32_t magic;       /* 0xVC0CAFE0                            */
     uint8_t  op;          /* VC_WAL_SET | VC_WAL_DEL | VC_WAL_CKP */
@@ -206,7 +232,12 @@ typedef struct {
     uint64_t seq;         /* monotonically increasing              */
     int64_t  ts_ns;       /* wall clock at write time              */
     uint8_t  _pad2[24];
+#ifdef _MSC_VER
+#pragma pack(pop)
+} vc_wal_hdr_t;
+#else
 } __attribute__((packed)) vc_wal_hdr_t;
+#endif
 
 _Static_assert(sizeof(vc_wal_hdr_t) == 64, "WAL header must be 64 bytes");
 

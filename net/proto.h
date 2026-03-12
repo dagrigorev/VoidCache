@@ -27,7 +27,9 @@
  * New VoidCache commands extend the command set (see commands.h).
  * ─────────────────────────────────────────────────────────────────────────── */
 #pragma once
-#define _POSIX_C_SOURCE 200809L
+#if !defined(_WIN32) && !defined(_POSIX_C_SOURCE)
+# define _POSIX_C_SOURCE 200809L
+#endif
 
 #include <stddef.h>
 #include <stdint.h>
@@ -146,6 +148,7 @@ void vc_cmd_free(vc_cmd_t *cmd);
 /* ── RESP3 writers (append to vc_buf_t) ─────────────────────────────────── */
 int resp_write_ok(vc_buf_t *b);
 int resp_write_null(vc_buf_t *b);
+int resp_write_null_compat(vc_buf_t *b, bool resp3);
 int resp_write_error(vc_buf_t *b, const char *code, const char *msg);
 int resp_write_simple(vc_buf_t *b, const char *s);
 int resp_write_integer(vc_buf_t *b, int64_t n);
@@ -163,4 +166,4 @@ int resp_write_vc_json(vc_buf_t *b, const char *json, size_t len);
 int resp_write_vc_binary(vc_buf_t *b, const void *data, size_t len);
 
 /* HELLO response (RESP3 handshake) */
-int resp_write_hello(vc_buf_t *b, const char *server_ver, const char *node_id);
+int resp_write_hello(vc_buf_t *b, const char *server_ver, const char *node_id, bool resp3);

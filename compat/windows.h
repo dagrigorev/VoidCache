@@ -20,18 +20,7 @@
 #include <ws2tcpip.h>
 #include <bcrypt.h>
 
-/* ── MAP_ANONYMOUS ─────────────────────────────────────────────────────────
- * MinGW's sys/mman.h defines MAP_ANONYMOUS as MAP_ANON.
- * If neither is defined, define MAP_ANONYMOUS to 0 — mmap on Windows
- * (via MinGW's mman shim) treats it correctly when fd=-1.
- */
-#ifndef MAP_ANONYMOUS
-  #ifdef MAP_ANON
-    #define MAP_ANONYMOUS MAP_ANON
-  #else
-    #define MAP_ANONYMOUS 0
-  #endif
-#endif
+/* mmap/munmap provided by compat/mman.h — included in files that need it */
 
 /* ── SO_REUSEPORT ──────────────────────────────────────────────────────────
  * Windows doesn't have SO_REUSEPORT (added in a very recent Insider build).
@@ -40,6 +29,12 @@
  */
 #ifndef SO_REUSEPORT
   #define SO_REUSEPORT SO_REUSEADDR
+#endif
+
+/* MSG_NOSIGNAL: suppress SIGPIPE on broken connections.
+ * Windows has no SIGPIPE, so this flag is a no-op there. */
+#ifndef MSG_NOSIGNAL
+# define MSG_NOSIGNAL 0
 #endif
 
 /* ── sigwait / pthread_sigmask replacement ─────────────────────────────────

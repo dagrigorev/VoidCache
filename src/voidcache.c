@@ -2,11 +2,26 @@
  * voidcache.c  –  VoidCache core implementation
  *
  * Build flags: -O3 -march=native -funroll-loops
+ * Windows:     -O2 -std=c11 -DVCACHE_WINDOWS (via Makefile.windows)
  */
-#define _POSIX_C_SOURCE 200809L
-#define _GNU_SOURCE
+#ifndef _WIN32
+# define _POSIX_C_SOURCE 200809L
+# define _GNU_SOURCE
+#endif
 
 #include "voidcache.h"
+
+#ifdef _MSC_VER
+# include "../compat/msvc.h"
+# include "../compat/pthread_win32.h"
+# include "../compat/mman.h"
+# include "../compat/wepoll.h"
+#elif defined(_WIN32)
+# include "../compat/windows.h"
+# include "../compat/mman.h"
+#else
+# include <sys/mman.h>
+#endif
 
 #include <stdlib.h>
 #include <string.h>
@@ -14,7 +29,6 @@
 #include <fcntl.h>
 #include <unistd.h>
 #include <errno.h>
-#include <sys/mman.h>
 #include <sys/stat.h>
 #include <time.h>
 #include <assert.h>

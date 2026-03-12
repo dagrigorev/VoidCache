@@ -24,7 +24,9 @@
  *   --pipe            read commands from stdin (batch mode)
  *   --raw             print raw bytes, no type decoration
  */
-#define _POSIX_C_SOURCE 200809L
+#ifndef _WIN32
+# define _POSIX_C_SOURCE 200809L
+#endif
 #define _GNU_SOURCE
 #include <stdio.h>
 #include <stdlib.h>
@@ -38,6 +40,11 @@
 #include <signal.h>
 #include <inttypes.h>
 
+#ifdef _MSC_VER
+# include "../compat/msvc.h"
+#elif defined(_WIN32)
+# include "../compat/windows.h"
+#endif
 #include <sys/socket.h>
 #include <netinet/in.h>
 #include <netinet/tcp.h>
@@ -555,6 +562,12 @@ static size_t parse_mem(const char *s) {
 
 int main(int argc, char **argv) {
     if (!isatty(STDOUT_FILENO)) use_color = false;
+
+#ifdef _WIN32
+    /* Winsock must be initialised before any socket operations on Windows. */
+    { WSADATA _wsa; WSAStartup(MAKEWORD(2,2), &_wsa); }
+#endif
+
     signal(SIGPIPE, SIG_IGN);
 
     /* Defaults */

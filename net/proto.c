@@ -2,6 +2,10 @@
  * net/proto.c  –  RESP3 protocol parser / writer implementation.
  */
 #define _POSIX_C_SOURCE 200809L
+#ifdef _MSC_VER
+# include "../compat/msvc.h"
+#endif
+
 #include <stdarg.h>
 #include <inttypes.h>
 #include "proto.h"
@@ -249,6 +253,14 @@ int resp_write_null(vc_buf_t *b) {
     return 0;
 }
 
+/* RESP2-compatible null: $-1 for RESP2, _ for RESP3.
+ * Sending RESP3 _ to a RESP2 client (e.g. redis-cli) causes it to stall. */
+int resp_write_null_compat(vc_buf_t *b, bool resp3) {
+    if (resp3) APPENDZ(b, "_\r\n");
+    else        APPENDZ(b, "$-1\r\n");
+    return 0;
+}
+
 int resp_write_error(vc_buf_t *b, const char *code, const char *msg) {
     return buf_printf(b, "-%s %s\r\n", code, msg);
 }
@@ -325,24 +337,29 @@ int resp_write_vc_binary(vc_buf_t *b, const void *data, size_t len) {
 }
 
 /* ── HELLO (RESP3 handshake) ─────────────────────────────────────────────── */
-int resp_write_hello(vc_buf_t *b, const char *server_ver, const char *node_id) {
-    /* HELLO returns a RESP3 map with server info */
+int resp_write_hello(vc_buf_t *b, const char *server_ver, const char *node_id,
+                     bool resp3) {
+    /*
+     * HELLO response must match the negotiated protocol version:
+     *   RESP3 (proto=3): %map header  — redis-cli and drivers expect this.
+     *   RESP2 (proto=2): *array header — RESP2 clients cannot parse %map
+     *                    and will stall reading the response.
+     */
     int pairs = 5;
-    if (resp_write_map_header(b, pairs) < 0) return -1;
-    /* server */
+    if (resp3) {
+        if (resp_write_map_header(b, pairs) < 0) return -1;
+    } else {
+        if (resp_write_array_header(b, pairs * 2) < 0) return -1;
+    }
     resp_write_bulk(b, "server", 6);
     resp_write_bulk(b, "voidcache", 9);
-    /* version */
     resp_write_bulk(b, "version", 7);
     resp_write_bulk(b, server_ver, strlen(server_ver));
-    /* proto */
     resp_write_bulk(b, "proto", 5);
-    resp_write_integer(b, 3);
-    /* id */
+    resp_write_integer(b, resp3 ? 3 : 2);
     resp_write_bulk(b, "id", 2);
     resp_write_bulk(b, node_id, strlen(node_id));
-    /* mode */
     resp_write_bulk(b, "mode", 4);
-    resp_write_bulk(b, "cluster", 7);
+    resp_write_bulk(b, "standalone", 10);
     return 0;
 }

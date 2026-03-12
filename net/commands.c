@@ -2,6 +2,10 @@
  * net/commands.c  –  VoidCache command implementations.
  */
 #define _POSIX_C_SOURCE 200809L
+#ifdef _MSC_VER
+# include "../compat/msvc.h"
+#endif
+
 #include "commands.h"
 #include "proto.h"
 #include "auth.h"
@@ -23,7 +27,7 @@
 #define OK(c)            resp_write_ok(WBUF(c))
 #define INT(c, n)        resp_write_integer(WBUF(c), n)
 #define BULK(c, s, l)    resp_write_bulk(WBUF(c), s, l)
-#define NULLREPLY(c)     resp_write_null(WBUF(c))
+#define NULLREPLY(c)     resp_write_null_compat(WBUF(c), (c)->resp3)
 #define ARGC_CHECK(c, mn, mx) \
     if ((cmd->argc-1) < (mn) || (cmd->argc-1) > (mx)) { \
         ERR(c, "ERR", "wrong number of arguments"); return; }
@@ -105,7 +109,7 @@ static void cmd_hello(vcserver_t *srv, vc_conn_t *conn, vc_cmd_t *cmd) {
     }
 
     conn->resp3 = (proto == 3);
-    resp_write_hello(WBUF(conn), VC_SERVER_VERSION, srv->node_id);
+    resp_write_hello(WBUF(conn), VC_SERVER_VERSION, srv->node_id, conn->resp3);
 }
 
 static void cmd_auth(vcserver_t *srv, vc_conn_t *conn, vc_cmd_t *cmd) {
@@ -635,8 +639,41 @@ static void cmd_config(vcserver_t *srv, vc_conn_t *conn, vc_cmd_t *cmd) {
 }
 
 static void cmd_command(vcserver_t *srv, vc_conn_t *conn, vc_cmd_t *cmd) {
-    (void)srv; (void)cmd;
-    /* Return empty array — drivers call COMMAND DOCS on startup */
+    (void)srv;
+    /*
+     * redis-cli and most drivers call COMMAND (or subcommands) on startup
+     * to introspect available commands.  Return minimal valid responses so
+     * they don't stall waiting for data that will never come.
+     *
+     * In particular, redis-cli 7+ sends:
+     *   COMMAND DOCS <cmd>    → expects %map (RESP3) or *array (RESP2)
+     *   COMMAND COUNT         → expects :integer
+     *   COMMAND INFO <cmd>    → expects *array of per-command info
+     */
+    if (cmd->argc < 2) {
+        resp_write_array_header(WBUF(conn), 0);
+        return;
+    }
+    const char *sub = cmd->argv[1];
+    if (strcasecmp(sub, "COUNT") == 0) {
+        INT(conn, 0);
+        return;
+    }
+    if (strcasecmp(sub, "DOCS") == 0) {
+        /* RESP3 map or RESP2 empty array — both are zero-element */
+        if (conn->resp3) resp_write_map_header(WBUF(conn), 0);
+        else             resp_write_array_header(WBUF(conn), 0);
+        return;
+    }
+    if (strcasecmp(sub, "INFO") == 0) {
+        int n = cmd->argc - 2;
+        if (n <= 0) { resp_write_array_header(WBUF(conn), 0); return; }
+        resp_write_array_header(WBUF(conn), n);
+        for (int i = 0; i < n; i++)
+            resp_write_null_compat(WBUF(conn), conn->resp3);
+        return;
+    }
+    /* LIST, GETKEYS, unknown subcommands */
     resp_write_array_header(WBUF(conn), 0);
 }
 
