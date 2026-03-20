@@ -249,7 +249,7 @@ one at a time. HAProxy removes the pod from rotation during restart.
 
 ```bash
 # Update image
-kubectl set image statefulset/vcache vcache=ghcr.io/yourorg/voidcache:2.1.0 -n voidcache
+kubectl set image statefulset/vcache vcache=ghcr.io/dagrigorev/voidcache:2.1.0 -n voidcache
 
 # Watch the ordered rollout
 kubectl rollout status statefulset/vcache -n voidcache --timeout=300s

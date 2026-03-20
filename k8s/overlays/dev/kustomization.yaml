@@ -10,7 +10,7 @@ nameSuffix: ""
 
 # Dev-specific image — built locally and loaded into minikube/kind
 images:
-  - name: ghcr.io/yourorg/voidcache
+  - name: ghcr.io/dagrigorev/voidcache
     newName: voidcache           # local image name after docker build
     newTag: latest
 

@@ -88,9 +88,9 @@ spec:
       containers:
         - name: vcache
           # Replace with your registry after pushing:
-          #   docker build -t ghcr.io/yourorg/voidcache:2.0.0 .
-          #   docker push ghcr.io/yourorg/voidcache:2.0.0
-          image: ghcr.io/yourorg/voidcache:2.0.0
+          #   docker build -t ghcr.io/dagrigorev/voidcache:2.0.0 .
+          #   docker push ghcr.io/dagrigorev/voidcache:2.0.0
+          image: ghcr.io/dagrigorev/voidcache:2.0.0
           imagePullPolicy: IfNotPresent
 
           ports:

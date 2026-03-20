@@ -9,12 +9,12 @@ keywords:
   - redis
   - in-memory
   - voidcache
-home: https://github.com/yourorg/voidcache
+home: https://github.com/dagrigorev/voidcache
 sources:
-  - https://github.com/yourorg/voidcache
+  - https://github.com/dagrigorev/voidcache
 maintainers:
-  - name: yourorg
-    email: you@example.com
+  - name: dagrigorev
+    email: jabberwooky@bk.ru
 annotations:
   artifacthub.io/license: MIT
   artifacthub.io/category: database
