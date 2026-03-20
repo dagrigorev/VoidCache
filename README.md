@@ -226,6 +226,64 @@ Multi-threaded (inline, 100% reads)
 80% GET / 20% SET mixed (8 threads)                    4.1 M      246
 ```
 
+### Что видно сразу
+- **VoidCache** стабильно опережает **Redis** и **Memcached** по `ops/sec`.
+- Наиболее сильное преимущество проявляется при:
+  - высокой **concurrency**
+  - **pipeline batching**
+  - интенсивных сценариях записи
+- По **p95 latency** VoidCache также показывает наиболее устойчивое поведение под нагрузкой.
+
+## Сводная таблица по сценариям
+
+| scenarioName | Ops: VC/Redis | Ops: VC/Memcached | P95 advantage vs Redis | P95 advantage vs Memcached |
+| --- | --- | --- | --- | --- |
+| mixed.read-write | 2.01 | 3.78 | 1.61 | 3.17 |
+| read.single-get | 3.02 | 5.33 | 3.06 | 5.77 |
+| write.batch-pipeline | 9.91 | 55.48 | 53.45 | 43.2 |
+| write.concurrency | 5.59 | 7.12 | 3.29 | 6.59 |
+| write.single-set | 2.81 | 5.07 | 2.89 | 5.01 |
+
+### Интерпретация колонок
+- **Ops: VC/Redis** — во сколько раз VoidCache быстрее Redis по пропускной способности.
+- **Ops: VC/Memcached** — во сколько раз VoidCache быстрее Memcached по пропускной способности.
+- **P95 advantage vs Redis** — во сколько раз p95 latency у VoidCache лучше Redis.
+- **P95 advantage vs Memcached** — во сколько раз p95 latency у VoidCache лучше Memcached.
+
+## Графики
+
+### 1. Median ops/sec by scenario
+
+![Median ops/sec by scenario](./chart_ops_by_scenario.png)
+
+**Вывод:** VoidCache лидирует во всех ключевых сценариях. Особенно заметен отрыв в `write.batch-pipeline` и `write.concurrency`.
+
+### 2. Write throughput scaling vs concurrency
+
+![Write throughput scaling vs concurrency](./chart_write_scaling_ops.png)
+
+**Вывод:** с ростом параллелизма VoidCache масштабируется значительно лучше конкурентов. У Redis рост более умеренный, а Memcached быстро выходит на плато.
+
+### 3. Write p95 latency vs concurrency
+
+![Write p95 latency vs concurrency](./chart_write_scaling_p95.png)
+
+**Вывод:** даже при увеличении concurrency p95 latency у VoidCache остаётся низкой и растёт плавно. Это признак более устойчивого поведения под нагрузкой.
+
+### 4. Pipeline batching effect on write throughput
+
+![Pipeline batching effect on write throughput](./chart_pipeline_scaling_ops.png)
+
+**Вывод:** batching даёт VoidCache особенно сильное преимущество. Это самый показательный сценарий в отчёте.
+
+## Итог
+
+Если сформулировать суть данных коротко:
+
+> **VoidCache выигрывает не только в одиночных операциях, но особенно сильно раскрывается в сценариях высокой нагрузки, параллелизма и batching.**
+
+Это указывает на сильную внутреннюю архитектуру именно для нагрузочных production-like сценариев, а не только для простых микробенчмарков.
+
 ### vs Redis and Memcached
 
 | Scenario | VoidCache | Redis | Memcached | Speedup |

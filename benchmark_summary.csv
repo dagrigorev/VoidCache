@@ -1,0 +1,6 @@
+scenarioName,Ops: VC/Redis,Ops: VC/Memcached,P95 advantage vs Redis,P95 advantage vs Memcached
+mixed.read-write,2.01,3.78,1.61,3.17
+read.single-get,3.02,5.33,3.06,5.77
+write.batch-pipeline,9.91,55.48,53.45,43.2
+write.concurrency,5.59,7.12,3.29,6.59
+write.single-set,2.81,5.07,2.89,5.01
