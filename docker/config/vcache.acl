@@ -16,13 +16,13 @@
 # Example users:
 #
 # Full-access admin (password: "adminpass")
-admin  3ba05beee8a9d6c6c5e99bf49e6a17eb6d7f9a5ad5b5bfc14f7c5b0a8d1f2c3  *
+admin  713bfda78870bf9d1b261f565286f85e97ee614efe5f0faf7c34e7ca4f65baca  *
 #
 # Read-only service account (password: "readonly")
-reader e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855  r
+reader 8171bacf32668a8f44b90087ad107ed63170f57154763ba7e44047bf9e5a7be3  r
 #
 # Application account with read+write (password: "apppass")
-app    5e884898da28047151d0e56f8dc6292773603d0d6aabbdd62a11ef721d1542d8  rw
+app    46400f642c99584e51b14031f875ca9b7b33ccf94ff8d7657197a5bac06f4ffb  rw
 #
 # Default user (no-username AUTH <password>)  password: "secret"
 default  2bb80d537b1da3e38bd30361aa855686bde0eacd7162fef6a25fe97bf527a25b  rw
