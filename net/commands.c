@@ -157,13 +157,28 @@ static void cmd_quit(vcserver_t *srv, vc_conn_t *conn, vc_cmd_t *cmd) {
     conn->state = VC_CONN_CLOSING;
 }
 
+/* RESET — resets connection state. StackExchange.Redis sends this on reconnect. */
+static void cmd_reset(vcserver_t *srv, vc_conn_t *conn, vc_cmd_t *cmd) {
+    (void)srv; (void)cmd;
+    conn->db_idx = 0;
+    resp_write_simple(WBUF(conn), "RESET");
+}
+
 static void cmd_client(vcserver_t *srv, vc_conn_t *conn, vc_cmd_t *cmd) {
     (void)srv;
     if (cmd->argc < 2) { ERR(conn, "ERR", "wrong arguments"); return; }
     const char *sub = cmd->argv[1];
-    if (strcasecmp(sub, "SETNAME") == 0) { OK(conn); return; }
-    if (strcasecmp(sub, "GETNAME") == 0) { BULK(conn, "", 0); return; }
-    if (strcasecmp(sub, "ID") == 0) { INT(conn, (int64_t)conn->fd); return; }
+    if (strcasecmp(sub, "SETNAME")  == 0) { OK(conn); return; }
+    if (strcasecmp(sub, "GETNAME")  == 0) { BULK(conn, "", 0); return; }
+    if (strcasecmp(sub, "ID")       == 0) { INT(conn, (int64_t)conn->fd); return; }
+    /* StackExchange.Redis / RedisInsight no-op stubs */
+    if (strcasecmp(sub, "NO-EVICT") == 0) { OK(conn); return; }
+    if (strcasecmp(sub, "NO-TOUCH") == 0) { OK(conn); return; }
+    if (strcasecmp(sub, "UNPAUSE")  == 0) { OK(conn); return; }
+    if (strcasecmp(sub, "PAUSE")    == 0) { OK(conn); return; }
+    if (strcasecmp(sub, "CACHING")  == 0) { OK(conn); return; }
+    if (strcasecmp(sub, "REPLY")    == 0) { OK(conn); return; }
+    if (strcasecmp(sub, "TRACKING") == 0) { OK(conn); return; }
     if (strcasecmp(sub, "INFO") == 0) {
         char info[256];
         snprintf(info, sizeof(info),
@@ -171,7 +186,17 @@ static void cmd_client(vcserver_t *srv, vc_conn_t *conn, vc_cmd_t *cmd) {
             conn->fd, conn->peer_addr, conn->peer_port);
         BULK(conn, info, strlen(info)); return;
     }
-    ERR(conn, "ERR", "unknown CLIENT subcommand");
+    if (strcasecmp(sub, "LIST") == 0) {
+        /* Return minimal CLIENT LIST entry for this connection */
+        char buf[512];
+        int n = snprintf(buf, sizeof(buf),
+            "id=%d addr=%s:%u fd=%d name= age=0 idle=0 flags=N "
+            "db=0 sub=0 psub=0 multi=-1 rbs=16384 rbp=0 "
+            "obl=0 oll=0 omem=0 events=r cmd=client resp=2\n",
+            conn->fd, conn->peer_addr, conn->peer_port, conn->fd);
+        BULK(conn, buf, (size_t)n); return;
+    }
+    resp_write_error(WBUF(conn), "ERR", "unknown CLIENT subcommand");
 }
 
 /* ══════════════════════════════════════════════════════════════
@@ -583,6 +608,8 @@ static void cmd_info(vcserver_t *srv, vc_conn_t *conn, vc_cmd_t *cmd) {
     char info[4096];
     int n = snprintf(info, sizeof(info),
         "# Server\r\n"
+        "redis_version:%s\r\n"
+        "redis_mode:%s\r\n"
         "server:voidcache\r\n"
         "version:%s\r\n"
         "node_id:%s\r\n"
@@ -604,9 +631,28 @@ static void cmd_info(vcserver_t *srv, vc_conn_t *conn, vc_cmd_t *cmd) {
         "# Keyspace\r\n"
         "db0:keys=%llu\r\n"
         "\r\n"
+        "# Replication\r\n"
+        "role:master\r\n"
+        "connected_slaves:0\r\n"
+        "master_failover_state:no-failover\r\n"
+        "master_replid:0000000000000000000000000000000000000000\r\n"
+        "master_repl_offset:0\r\n"
+        "\r\n"
+        "# Persistence\r\n"
+        "loading:0\r\n"
+        "rdb_changes_since_last_save:0\r\n"
+        "rdb_last_bgsave_status:ok\r\n"
+        "aof_enabled:0\r\n"
+        "\r\n"
+        "# CPU\r\n"
+        "used_cpu_sys:0\r\n"
+        "used_cpu_user:0\r\n"
+        "\r\n"
         "# Memory\r\n"
         "used_memory:%llu\r\n"
         "maxmemory:%llu\r\n",
+        VC_SERVER_VERSION,
+        srv->cfg.cluster_enabled ? "cluster" : "standalone",
         VC_SERVER_VERSION,
         srv->node_id,
         srv->cfg.cluster_enabled ? "cluster" : "standalone",
@@ -629,8 +675,44 @@ static void cmd_config(vcserver_t *srv, vc_conn_t *conn, vc_cmd_t *cmd) {
     (void)srv;
     if (cmd->argc < 2) { ERR(conn, "ERR", "wrong arguments"); return; }
     if (strcasecmp(cmd->argv[1], "GET") == 0 && cmd->argc >= 3) {
-        /* Return empty array — no config params exposed */
-        resp_write_array_header(WBUF(conn), 0);
+        /* Return a minimal but realistic config for driver compatibility.
+         * StackExchange.Redis and RedisInsight query these on connect. */
+        const char *pat = cmd->argv[2];
+        /* Helper: does the glob pattern match the key? (simple * wildcard) */
+        #define CFGMATCH(k) (strcmp(pat,"*")==0 || strcasecmp(pat,(k))==0 ||                               (pat[strlen(pat)-1]=='*' &&                                strncasecmp(pat,(k),strlen(pat)-1)==0))
+        char maxmem[32];
+        snprintf(maxmem, sizeof(maxmem), "%llu",
+                 (unsigned long long)srv->cache->max_memory);
+        /* Build array of matched key-value pairs */
+        struct { const char *k; const char *v; } entries[] = {
+            { "hz",                        "10"        },
+            { "maxmemory",                 maxmem      },
+            { "maxmemory-policy",          "allkeys-lru"},
+            { "save",                      ""          },
+            { "appendonly",                "no"        },
+            { "list-max-ziplist-size",     "-2"        },
+            { "list-compress-depth",       "0"         },
+            { "activerehashing",           "yes"       },
+            { "lazyfree-lazy-eviction",    "no"        },
+            { "latency-tracking",          "yes"       },
+            { "latency-tracking-info-percentiles", "50 99 99.9" },
+            { "proto-max-bulk-len",        "536870912" },
+            { "activedefrag",              "no"        },
+            { "repl-backlog-size",         "1048576"   },
+            { "bind-source-addr",          ""          },
+            { "socket-mark-id",            "0"         },
+        };
+        int nmatch = 0;
+        for (size_t e = 0; e < sizeof(entries)/sizeof(entries[0]); e++)
+            if (CFGMATCH(entries[e].k)) nmatch++;
+        resp_write_array_header(WBUF(conn), nmatch * 2);
+        for (size_t e = 0; e < sizeof(entries)/sizeof(entries[0]); e++) {
+            if (CFGMATCH(entries[e].k)) {
+                BULK(conn, entries[e].k, strlen(entries[e].k));
+                BULK(conn, entries[e].v, strlen(entries[e].v));
+            }
+        }
+        #undef CFGMATCH
         return;
     }
     if (strcasecmp(cmd->argv[1], "SET") == 0) { OK(conn); return; }
@@ -885,6 +967,91 @@ typedef struct {
     uint32_t       acl_needed;   /* 0 = always allowed (PING/AUTH/HELLO) */
 } vc_cmd_entry_t;
 
+/* ── ACL commands (RedisInsight + driver feature detection) ────────────── */
+static void cmd_acl(vcserver_t *srv, vc_conn_t *conn, vc_cmd_t *cmd) {
+    (void)srv;
+    if (cmd->argc < 2) { ERR(conn, "ERR", "wrong arguments"); return; }
+    const char *sub = cmd->argv[1];
+    if (strcasecmp(sub, "WHOAMI") == 0) {
+        const char *name = (conn->user && conn->user->username[0])
+                           ? conn->user->username : "default";
+        BULK(conn, name, strlen(name)); return;
+    }
+    if (strcasecmp(sub, "CAT") == 0) {
+        resp_write_array_header(WBUF(conn), 4);
+        BULK(conn, "read",   4); BULK(conn, "write",  5);
+        BULK(conn, "admin",  5); BULK(conn, "pubsub", 6); return;
+    }
+    if (strcasecmp(sub, "LIST") == 0) {
+        resp_write_array_header(WBUF(conn), 1);
+        const char *name = (conn->user && conn->user->username[0])
+                           ? conn->user->username : "default";
+        char rule[128];
+        snprintf(rule, sizeof(rule), "user %s on ~* &* +@all", name);
+        BULK(conn, rule, strlen(rule)); return;
+    }
+    if (strcasecmp(sub, "GETUSER")  == 0) { resp_write_null_compat(WBUF(conn), conn->resp3); return; }
+    if (strcasecmp(sub, "SETUSER")  == 0 ||
+        strcasecmp(sub, "DELUSER")  == 0 ||
+        strcasecmp(sub, "LOG")      == 0 ||
+        strcasecmp(sub, "RESET")    == 0) { OK(conn); return; }
+    resp_write_error(WBUF(conn), "ERR", "unknown ACL subcommand");
+}
+
+/* ── LATENCY (RedisInsight monitoring) ─────────────────────────────────── */
+static void cmd_latency(vcserver_t *srv, vc_conn_t *conn, vc_cmd_t *cmd) {
+    (void)srv;
+    if (cmd->argc < 2) { ERR(conn, "ERR", "wrong arguments"); return; }
+    const char *sub = cmd->argv[1];
+    if (strcasecmp(sub, "LATEST")  == 0) { resp_write_array_header(WBUF(conn), 0); return; }
+    if (strcasecmp(sub, "HISTORY") == 0) { resp_write_array_header(WBUF(conn), 0); return; }
+    if (strcasecmp(sub, "RESET")   == 0) { INT(conn, 0); return; }
+    if (strcasecmp(sub, "GRAPH")   == 0) { BULK(conn, "", 0); return; }
+    resp_write_error(WBUF(conn), "ERR", "unknown LATENCY subcommand");
+}
+
+/* ── SLOWLOG (RedisInsight) ─────────────────────────────────────────────── */
+static void cmd_slowlog(vcserver_t *srv, vc_conn_t *conn, vc_cmd_t *cmd) {
+    (void)srv;
+    if (cmd->argc < 2) { ERR(conn, "ERR", "wrong arguments"); return; }
+    const char *sub = cmd->argv[1];
+    if (strcasecmp(sub, "GET")   == 0) { resp_write_array_header(WBUF(conn), 0); return; }
+    if (strcasecmp(sub, "LEN")   == 0) { INT(conn, 0); return; }
+    if (strcasecmp(sub, "RESET") == 0) { OK(conn); return; }
+    resp_write_error(WBUF(conn), "ERR", "unknown SLOWLOG subcommand");
+}
+
+/* ── OBJECT (RedisInsight key inspector) ────────────────────────────────── */
+static void cmd_object(vcserver_t *srv, vc_conn_t *conn, vc_cmd_t *cmd) {
+    (void)srv;
+    if (cmd->argc < 2) { ERR(conn, "ERR", "wrong arguments"); return; }
+    const char *sub = cmd->argv[1];
+    if (strcasecmp(sub, "ENCODING") == 0) { BULK(conn, "embstr", 7); return; }
+    if (strcasecmp(sub, "REFCOUNT") == 0) { INT(conn, 1); return; }
+    if (strcasecmp(sub, "IDLETIME") == 0) { INT(conn, 0); return; }
+    if (strcasecmp(sub, "FREQ")     == 0) { INT(conn, 0); return; }
+    if (strcasecmp(sub, "HELP")     == 0) { resp_write_array_header(WBUF(conn), 0); return; }
+    resp_write_error(WBUF(conn), "ERR", "unknown OBJECT subcommand");
+}
+
+/* ── WAIT (SE.Redis replication sync) ──────────────────────────────────── */
+static void cmd_wait(vcserver_t *srv, vc_conn_t *conn, vc_cmd_t *cmd) {
+    (void)srv; (void)cmd;
+    INT(conn, 0); /* single-node: 0 replicas */
+}
+
+/* ── XLEN stub (Streams feature detection) ──────────────────────────────── */
+static void cmd_xlen(vcserver_t *srv, vc_conn_t *conn, vc_cmd_t *cmd) {
+    (void)srv; (void)cmd;
+    ERR(conn, "WRONGTYPE", "Operation against a key holding the wrong kind of value");
+}
+
+/* ── SRANDMEMBER stub ───────────────────────────────────────────────────── */
+static void cmd_srandmember(vcserver_t *srv, vc_conn_t *conn, vc_cmd_t *cmd) {
+    (void)srv; (void)cmd;
+    ERR(conn, "WRONGTYPE", "Operation against a key holding the wrong kind of value");
+}
+
 static const vc_cmd_entry_t cmd_table[] = {
     /* Connection */
     { "PING",         cmd_ping,     0 },
@@ -928,6 +1095,15 @@ static const vc_cmd_entry_t cmd_table[] = {
     { "VCSET",        cmd_vcset,    VC_ACL_WRITE },
     { "VCGET",        cmd_vcget,    VC_ACL_READ  },
     { "VCINFO",       cmd_vcinfo,   VC_ACL_READ  },
+    /* StackExchange.Redis + RedisInsight compatibility */
+    { "RESET",        cmd_reset,    0 },
+    { "ACL",          cmd_acl,      0 },
+    { "LATENCY",      cmd_latency,  VC_ACL_ADMIN },
+    { "SLOWLOG",      cmd_slowlog,  VC_ACL_ADMIN },
+    { "OBJECT",       cmd_object,   VC_ACL_READ  },
+    { "WAIT",         cmd_wait,     0 },
+    { "XLEN",         cmd_xlen,     VC_ACL_READ  },
+    { "SRANDMEMBER",  cmd_srandmember, VC_ACL_READ },
 };
 
 #define CMD_TABLE_SIZE (sizeof(cmd_table) / sizeof(cmd_table[0]))

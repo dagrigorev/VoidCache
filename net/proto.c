@@ -127,24 +127,34 @@ resp_parse_result_t resp_parse_command(const char *buf, size_t len,
 
 #define NEED(n) do { if ((size_t)(end - p) < (size_t)(n)) return RESP_PARSE_MORE; } while(0)
 
-    /* ── Inline command (telnet-friendly) ── */
+    /* ── Inline command (telnet-friendly, handles \r\n and bare \n) ── */
     if (*p != '*') {
-        const char *nl = find_crlf(p, (size_t)(end - p));
+        /* Find end of line — accept both \r\n and bare \n */
+        const char *nl = NULL;
+        size_t nl_skip = 2;  /* bytes to skip past the line ending */
+        for (const char *q = p; q < end; q++) {
+            if (*q == '\r' && q + 1 < end && *(q+1) == '\n') {
+                nl = q; nl_skip = 2; break;
+            }
+            if (*q == '\n') {
+                nl = q; nl_skip = 1; break;
+            }
+        }
         if (!nl) return RESP_PARSE_MORE;
-        /* Split on spaces */
+        /* Split on spaces/tabs */
         const char *s = p;
         while (s < nl && cmd->argc < VC_MAX_ARGS) {
-            while (s < nl && *s == ' ') s++;
+            while (s < nl && (*s == ' ' || *s == '\t')) s++;
             if (s >= nl) break;
             const char *e2 = s;
-            while (e2 < nl && *e2 != ' ') e2++;
+            while (e2 < nl && *e2 != ' ' && *e2 != '\t') e2++;
             size_t alen = (size_t)(e2 - s);
             cmd->argv[cmd->argc] = strndup(s, alen);
             cmd->argl[cmd->argc] = alen;
             cmd->argc++;
             s = e2;
         }
-        *consumed = (size_t)(nl - buf) + 2;
+        *consumed = (size_t)(nl - buf) + nl_skip;
         return (cmd->argc > 0) ? RESP_PARSE_OK : RESP_PARSE_ERR;
     }
 
