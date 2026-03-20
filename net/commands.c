@@ -79,6 +79,12 @@ static void cmd_ping(vcserver_t *srv, vc_conn_t *conn, vc_cmd_t *cmd) {
         resp_write_simple(WBUF(conn), "PONG");
 }
 
+static void cmd_echo(vcserver_t *srv, vc_conn_t *conn, vc_cmd_t *cmd) {
+    (void)srv;
+    ARGC_CHECK(conn, 1, 1);
+    BULK(conn, cmd->argv[1], cmd->argl[1]);
+}
+
 static void cmd_hello(vcserver_t *srv, vc_conn_t *conn, vc_cmd_t *cmd) {
     /* HELLO [protover [AUTH username password] [SETNAME name]] */
     int proto = 2;
@@ -105,6 +111,12 @@ static void cmd_hello(vcserver_t *srv, vc_conn_t *conn, vc_cmd_t *cmd) {
             conn->user = u;
             vc_auth_gen_token(conn->token);
             i += 2;
+        }
+
+        if (strcasecmp(cmd->argv[i], "SETNAME") == 0 && i + 1 < cmd->argc) {
+            snprintf(conn->client_name, sizeof(conn->client_name), "%s", cmd->argv[i+1]);
+            i += 1;
+            continue;
         }
     }
 
@@ -159,18 +171,76 @@ static void cmd_quit(vcserver_t *srv, vc_conn_t *conn, vc_cmd_t *cmd) {
 
 static void cmd_client(vcserver_t *srv, vc_conn_t *conn, vc_cmd_t *cmd) {
     (void)srv;
-    if (cmd->argc < 2) { ERR(conn, "ERR", "wrong arguments"); return; }
-    const char *sub = cmd->argv[1];
-    if (strcasecmp(sub, "SETNAME") == 0) { OK(conn); return; }
-    if (strcasecmp(sub, "GETNAME") == 0) { BULK(conn, "", 0); return; }
-    if (strcasecmp(sub, "ID") == 0) { INT(conn, (int64_t)conn->fd); return; }
-    if (strcasecmp(sub, "INFO") == 0) {
-        char info[256];
-        snprintf(info, sizeof(info),
-            "id=%d\r\naddr=%s:%u\r\ncmd=client\r\n",
-            conn->fd, conn->peer_addr, conn->peer_port);
-        BULK(conn, info, strlen(info)); return;
+
+    if (cmd->argc < 2) {
+        ERR(conn, "ERR", "wrong number of arguments for CLIENT");
+        return;
     }
+
+    const char *sub = cmd->argv[1];
+
+    if (strcasecmp(sub, "SETNAME") == 0) {
+        if (cmd->argc != 3) {
+            ERR(conn, "ERR", "wrong number of arguments for CLIENT SETNAME");
+            return;
+        }
+        snprintf(conn->client_name, sizeof(conn->client_name), "%s", cmd->argv[2]);
+        OK(conn);
+        return;
+    }
+
+    if (strcasecmp(sub, "GETNAME") == 0) {
+        if (conn->client_name[0] == '\0') {
+            NULLREPLY(conn);
+        } else {
+            BULK(conn, conn->client_name, strlen(conn->client_name));
+        }
+        return;
+    }
+
+    if (strcasecmp(sub, "SETINFO") == 0) {
+        if (cmd->argc != 4) {
+            ERR(conn, "ERR", "wrong number of arguments for CLIENT SETINFO");
+            return;
+        }
+
+        if (strcasecmp(cmd->argv[2], "LIB-NAME") == 0) {
+            snprintf(conn->lib_name, sizeof(conn->lib_name), "%s", cmd->argv[3]);
+            OK(conn);
+            return;
+        }
+
+        if (strcasecmp(cmd->argv[2], "LIB-VER") == 0) {
+            snprintf(conn->lib_ver, sizeof(conn->lib_ver), "%s", cmd->argv[3]);
+            OK(conn);
+            return;
+        }
+
+        ERR(conn, "ERR", "unknown CLIENT SETINFO attribute");
+        return;
+    }
+
+    if (strcasecmp(sub, "ID") == 0) {
+        INT(conn, (int64_t)conn->fd);
+        return;
+    }
+
+    if (strcasecmp(sub, "INFO") == 0) {
+        char info[512];
+        snprintf(info, sizeof(info),
+            "id=%d addr=%s:%u laddr=127.0.0.1:%u name=%s age=0 idle=0 flags=N db=0 sub=0 psub=0 ssub=0 multi=-1 qbuf=0 qbuf-free=0 argv-mem=0 multi-mem=0 rbs=0 rbp=0 obl=0 oll=0 omem=0 tot-mem=0 events=r cmd=client|info user=%s lib-name=%s lib-ver=%s",
+            conn->fd,
+            conn->peer_addr[0] ? conn->peer_addr : "127.0.0.1",
+            conn->peer_port,
+            (unsigned)srv->cfg.port,
+            conn->client_name[0] ? conn->client_name : "",
+            conn->user ? conn->user->username : "default",
+            conn->lib_name[0] ? conn->lib_name : "",
+            conn->lib_ver[0] ? conn->lib_ver : "");
+        BULK(conn, info, strlen(info));
+        return;
+    }
+
     ERR(conn, "ERR", "unknown CLIENT subcommand");
 }
 
@@ -888,6 +958,7 @@ typedef struct {
 static const vc_cmd_entry_t cmd_table[] = {
     /* Connection */
     { "PING",         cmd_ping,     0 },
+    { "ECHO",         cmd_echo,     0 },
     { "HELLO",        cmd_hello,    0 },
     { "AUTH",         cmd_auth,     0 },
     { "SELECT",       cmd_select,   0 },

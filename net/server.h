@@ -59,14 +59,18 @@ typedef enum {
 typedef struct {
     int              fd;
     vc_conn_state_t  state;
-    SSL             *ssl;          /* NULL if plain TCP                  */
-    bool             resp3;        /* HELLO 3 negotiated?                */
+    SSL             *ssl;               /* NULL if plain TCP                  */
+    bool             resp3;             /* HELLO 3 negotiated?                */
+        
+    vc_buf_t        *rbuf;              /* read buffer                        */
+    vc_buf_t        *wbuf;              /* write buffer                       */
+        
+    const vc_user_t *user;              /* NULL = not authenticated           */
+    char             token[65];         /* session token (hex)                */
 
-    vc_buf_t        *rbuf;         /* read buffer                        */
-    vc_buf_t        *wbuf;         /* write buffer                       */
-
-    const vc_user_t *user;         /* NULL = not authenticated           */
-    char             token[65];    /* session token (hex)                */
+    char             client_name[128];  /* Client name                        */
+    char             lib_name[64];      /* Library name                       */
+    char             lib_ver[64];       /* Library version                    */
 
     int64_t          last_active;  /* monotonic ns                       */
     int              db_idx;       /* selected DB index (always 0 for VC)*/
