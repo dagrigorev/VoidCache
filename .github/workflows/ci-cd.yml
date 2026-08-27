@@ -150,7 +150,40 @@ jobs:
           sed -i "s/newTag: .*/newTag: \"${IMAGE_TAG}\"/" kustomization.yaml
 
       - name: Deploy to dev
-        run: kubectl apply -k k8s/overlays/dev --server-side
+        run: |
+          set +e
+          output=$(kubectl apply -k k8s/overlays/dev --server-side 2>&1)
+          status=$?
+          set -e
+          printf '%s\n' "$output"
+
+          if [ "$status" -ne 0 ]; then
+            case "$output" in
+              *forbidden*)
+                category="Kubernetes RBAC denied the deployment"
+                ;;
+              *Unauthorized*|*"You must be logged in"*|*"no configuration has been provided"*|*current-context*)
+                category="The dev kubeconfig is missing or unauthorized"
+                ;;
+              *"connection refused"*|*"i/o timeout"*|*"no such host"*|*"context deadline exceeded"*)
+                category="The dev Kubernetes API is unreachable"
+                ;;
+              *"provided port is already allocated"*)
+                category="A requested NodePort is already allocated"
+                ;;
+              *"field is immutable"*)
+                category="The deployment changes an immutable Kubernetes field"
+                ;;
+              *"strict decoding error"*|*"unknown field"*|*"yaml:"*|*"mapping key"*)
+                category="The rendered manifest is incompatible with the dev cluster API"
+                ;;
+              *)
+                category="kubectl apply failed; open the private job log for details"
+                ;;
+            esac
+            echo "::error title=kubectl apply failed::$category"
+            exit "$status"
+          fi
 
       - name: Wait for rollout
         run: |
