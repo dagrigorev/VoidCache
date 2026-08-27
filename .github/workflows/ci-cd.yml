@@ -24,6 +24,14 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
+      - name: Set up kubectl
+        uses: azure/setup-kubectl@v3
+
+      - name: Validate Kubernetes manifests
+        run: |
+          kubectl kustomize k8s/overlays/dev > /dev/null
+          kubectl kustomize k8s/overlays/prod > /dev/null
+
       - name: Install build dependencies
         run: sudo apt-get install -y gcc make libssl-dev
 

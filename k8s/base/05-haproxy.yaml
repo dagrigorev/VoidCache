@@ -41,9 +41,7 @@ spec:
                   matchLabels:
                     app.kubernetes.io/component: proxy
                 topologyKey: kubernetes.io/hostname
-        # Prefer to avoid nodes that already have a cache pod
-        podAntiAffinity:
-          preferredDuringSchedulingIgnoredDuringExecution:
+            # Prefer to avoid nodes that already have a cache pod
             - weight: 50
               podAffinityTerm:
                 labelSelector:
