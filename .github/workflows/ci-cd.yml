@@ -60,8 +60,9 @@ jobs:
     runs-on: ubuntu-24.04
     needs: build-and-test
     permissions:
-      contents: read
+      contents: write
       packages: write
+      actions: read
 
     outputs:
       image-tag: ${{ steps.meta.outputs.tags }}
