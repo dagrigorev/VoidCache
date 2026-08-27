@@ -3,7 +3,7 @@
 
 # ── Image ──────────────────────────────────────────────────────────────────────
 image:
-  repository: ghcr.io/yourorg/voidcache
+  repository: ghcr.io/dagrigorev/voidcache
   tag: "2.0.0"
   pullPolicy: IfNotPresent
   pullSecrets: []

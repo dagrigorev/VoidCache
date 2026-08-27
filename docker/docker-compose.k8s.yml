@@ -23,7 +23,7 @@
 name: voidcache
 
 x-vcache-node: &vcache-node
-  image: ${REGISTRY:-ghcr.io/yourorg}/voidcache:${TAG:-latest}
+  image: ${REGISTRY:-ghcr.io/dagrigorev/voidcache:${TAG:-latest}
   build:
     context: ..
     dockerfile: Dockerfile

@@ -24,6 +24,14 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
+      - name: Set up kubectl
+        uses: azure/setup-kubectl@v3
+
+      - name: Validate Kubernetes manifests
+        run: |
+          kubectl kustomize k8s/overlays/dev > /dev/null
+          kubectl kustomize k8s/overlays/prod > /dev/null
+
       - name: Install build dependencies
         run: sudo apt-get install -y gcc make libssl-dev
 
@@ -113,49 +121,6 @@ jobs:
         uses: anchore/sbom-action@v0
         with:
           image: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:latest
-
-  # ── Deploy to dev (on every push to develop) ───────────────────────────────
-  deploy-dev:
-    name: Deploy → dev
-    runs-on: ubuntu-24.04
-    needs: docker
-    if: github.ref == 'refs/heads/develop' && github.event_name == 'push'
-    environment: dev
-
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-
-      - name: Set up kubectl
-        uses: azure/setup-kubectl@v3
-
-      - name: Configure kubeconfig
-        run: |
-          mkdir -p ~/.kube
-          echo "${{ secrets.KUBE_CONFIG_DEV }}" | base64 -d > ~/.kube/config
-          chmod 600 ~/.kube/config
-
-      - name: Set image tag in dev overlay
-        run: |
-          cd k8s/overlays/dev
-          # Update the image tag to the exact SHA that was just built
-          IMAGE_TAG="sha-$(echo '${{ github.sha }}' | cut -c1-7)"
-          sed -i "s/newTag: .*/newTag: \"${IMAGE_TAG}\"/" kustomization.yaml
-
-      - name: Deploy to dev
-        run: kubectl apply -k k8s/overlays/dev --server-side
-
-      - name: Wait for rollout
-        run: |
-          kubectl rollout status statefulset/vcache -n voidcache --timeout=180s
-          kubectl rollout status deployment/vcache-haproxy -n voidcache --timeout=60s
-
-      - name: Smoke test against dev cluster
-        run: |
-          kubectl port-forward svc/vcache 16399:6379 -n voidcache &
-          sleep 3
-          ./vcli -p 16399 --no-color PING
-          kill %1
 
   # ── Deploy to prod (on semver tag v*.*.*) ──────────────────────────────────
   deploy-prod:

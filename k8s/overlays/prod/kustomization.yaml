@@ -6,8 +6,8 @@ bases:
 
 # Point to your actual registry + version tag
 images:
-  - name: ghcr.io/yourorg/voidcache
-    newName: ghcr.io/yourorg/voidcache   # replace yourorg
+  - name: ghcr.io/dagrigorev/voidcache
+    newName: ghcr.io/dagrigorev/voidcache  
     newTag: "2.0.0"                       # pin to an exact release tag
 
 patches:
